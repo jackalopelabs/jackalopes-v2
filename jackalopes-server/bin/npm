@@ -1,0 +1,5 @@
+#!/bin/bash
+# This is a simple wrapper for npm that uses the bundled Node.js
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd $(dirname $DIR)
+$DIR/node /usr/bin/npm "$@"

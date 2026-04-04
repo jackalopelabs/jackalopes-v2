@@ -1,0 +1,34 @@
+# Composer
+/vendor/
+composer.lock
+
+# Environment files
+.env
+
+# Server files
+/server.pid
+/server.log
+/plugin.log
+
+# Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# WordPress
+wp-config.php
+wp-content/
+/wp-admin/
+/wp-includes/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Keep bundled Node.js binaries
+!/bin/node
+!/bin/npm
+!/bin/npx
+!/bin/node_modules/ 

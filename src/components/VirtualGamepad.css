@@ -1,0 +1,140 @@
+.virtual-gamepad {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: min(200px, 30vh);
+  display: flex;
+  justify-content: space-between;
+  z-index: 1000;
+  pointer-events: none;
+  touch-action: none;
+}
+
+.joystick-container {
+  margin: 20px;
+  position: relative;
+  pointer-events: auto;
+  user-select: none;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.joystick {
+  width: min(150px, 30vw);
+  height: min(150px, 30vw);
+  position: relative;
+  pointer-events: auto;
+  user-select: none;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Override NippleJS default styles */
+.nipple {
+  opacity: 0.8;
+}
+
+.front {
+  background-color: rgba(255, 255, 255, 0.8) !important;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+}
+
+.back {
+  background-color: rgba(0, 0, 0, 0.4) !important;
+  border: 2px solid rgba(255, 255, 255, 0.3) !important;
+}
+
+.action-buttons {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 20px;
+  margin: 20px;
+  pointer-events: auto;
+}
+
+.action-button {
+  width: min(70px, 18vw);
+  height: min(70px, 18vw);
+  border-radius: 50%;
+  background-color: rgba(0, 0, 0, 0.3);
+  color: white;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  cursor: pointer;
+  transition: transform 0.1s ease, background-color 0.1s ease;
+}
+
+.action-button:active,
+.action-button.active {
+  transform: scale(0.92);
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+/* SVG Icon styles */
+.gamepad-icon {
+  width: 50%;
+  height: 50%;
+  stroke-width: 2;
+}
+
+.action-button.jump .gamepad-icon {
+  stroke: rgba(255, 255, 255, 0.9);
+}
+
+.action-button.shoot .gamepad-icon {
+  stroke: rgba(255, 255, 255, 0.9);
+}
+
+/* Media query to adjust opacity on large screens */
+@media (min-width: 1024px) {
+  .virtual-gamepad {
+    opacity: 0.7;
+  }
+  
+  .virtual-gamepad:hover {
+    opacity: 0.9;
+  }
+}
+
+/* Portrait/Landscape adjustments */
+@media (orientation: portrait) {
+  .virtual-gamepad {
+    height: min(180px, 25vh);
+  }
+}
+
+@media (orientation: landscape) {
+  .virtual-gamepad {
+    height: min(150px, 40vh);
+  }
+  
+  .joystick-container {
+    margin: 15px;
+  }
+  
+  .joystick {
+    width: min(120px, 18vw);
+    height: min(120px, 18vw);
+  }
+  
+  .action-buttons {
+    margin: 15px;
+    gap: 15px;
+  }
+  
+  .action-button {
+    width: min(60px, 12vw);
+    height: min(60px, 12vw);
+  }
+} 
