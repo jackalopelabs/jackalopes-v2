@@ -527,6 +527,14 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
   // Update merc RigidBody kinematically from live store (Bug 2 fix)
   useFrame((_, delta) => {
     if (playerType !== 'merc' || !mercRigidBodyRef.current) return;
+
+    // Read live store INSIDE useFrame (component is memoized, render-time sync only runs once)
+    const mLive = (window as any).__livePlayerData?.[playerId];
+    if (mLive) {
+      latestPositionRef.current = mLive.position;
+      latestRotationRef.current = mLive.rotation;
+    }
+
     const pos = latestPositionRef.current;
     const rot = latestRotationRef.current;
     if (!pos) return;
@@ -581,8 +589,17 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
 
   // Update remote flashlight position in world space each frame
   useFrame(() => {
-    if (playerType === 'merc' && flashlightOn && 
+    if (playerType === 'merc' && latestFlashlightRef.current && 
         spotlightRef.current && spotlightTargetRef.current) {
+
+      // Read live store inside useFrame for fresh data
+      const fLive = (window as any).__livePlayerData?.[playerId];
+      if (fLive) {
+        latestPositionRef.current = fLive.position;
+        latestRotationRef.current = fLive.rotation;
+        latestCameraPitchRef.current = fLive.cameraPitch;
+        latestFlashlightRef.current = fLive.flashlightOn;
+      }
 
       const pos = latestPositionRef.current;
       const yaw = latestRotationRef.current;
@@ -753,6 +770,14 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     // Interpolate position & rotation for remote jackalope every frame
     useFrame((_, delta) => {
       if (!rigidBodyRef.current) return;
+
+      // Read live store INSIDE useFrame (component is memoized, render-time sync only runs once)
+      const jLive = (window as any).__livePlayerData?.[playerId];
+      if (jLive) {
+        jackalopePositionRef.current = jLive.position;
+        jackalopeRotationRef.current = jLive.rotation;
+      }
+
       const latestPos = jackalopePositionRef.current;
       if (!latestPos) return;
 
