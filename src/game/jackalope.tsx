@@ -695,7 +695,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         
         // Send multiplayer updates at fixed intervals
         if (connectionManager && connectionManager.isReadyToSend() &&
-            (Date.now() - lastStateTime.current > 50)) { // 20 updates per second
+            (Date.now() - lastStateTime.current > 16)) { // 60 updates per second
             
             lastStateTime.current = Date.now()
             

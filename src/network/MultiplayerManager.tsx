@@ -1149,19 +1149,14 @@ export const useMultiplayer = (
     // Connect to the server
     connectionManager.connect();
     
-    // Add a debug log to check connection status after 5 seconds
+    // Debug log to check connection status after 5 seconds (no auto-reconnect to prevent storm)
     setTimeout(() => {
       console.log("🔍 MULTIPLAYER CONNECTION STATUS (after 5s):");
       console.log("- IsConnected:", isConnected);
       console.log("- Remote players:", Object.keys(remotePlayers).length);
       console.log("- Server URL:", connectionManager.getServerUrl());
       console.log("- Socket state:", connectionManager.isReadyToSend() ? "READY" : "NOT_READY");
-      
-      // Try to reestablish connection if needed
-      if (!isConnected && !connectionManager.isReadyToSend()) {
-        console.log("Attempting to reconnect...");
-        connectionManager.connect();
-      }
+      // Auto-reconnect removed to prevent connection storm
     }, 5000);
     
     return () => {
@@ -1580,19 +1575,14 @@ export const MultiplayerManager: React.FC<{
     // Connect to the server
     connectionManager.connect();
     
-    // Add a debug log to check connection status after 5 seconds
+    // Debug log to check connection status after 5 seconds (no auto-reconnect to prevent storm)
     setTimeout(() => {
       console.log("🔍 MULTIPLAYER CONNECTION STATUS (after 5s):");
       console.log("- IsConnected:", isConnected);
       console.log("- Remote players:", Object.keys(remotePlayers).length);
       console.log("- Server URL:", connectionManager.getServerUrl());
       console.log("- Socket state:", connectionManager.isReadyToSend() ? "READY" : "NOT_READY");
-      
-      // Try to reestablish connection if needed
-      if (!isConnected && !connectionManager.isReadyToSend()) {
-        console.log("Attempting to reconnect...");
-        connectionManager.connect();
-      }
+      // Auto-reconnect removed to prevent connection storm
     }, 5000);
     
     return () => {

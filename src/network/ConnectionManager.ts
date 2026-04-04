@@ -49,7 +49,7 @@ export class ConnectionManager extends EventEmitter {
   private gameState: GameState = { players: {} };
   private reconnectTimeout: number | null = null;
   private keepAliveInterval: number | null = null;
-  
+
   // Add latency tracking properties
   private pingInterval: number | null = null;
   private pingStartTime: number = 0;
@@ -58,6 +58,11 @@ export class ConnectionManager extends EventEmitter {
   private pongReceived: boolean = false;
   private offlineMode: boolean = false; // Track if we're in offline mode
   private connectionFailed: boolean = false; // Track if connection failed after attempts
+
+  // Connection storm prevention
+  private isConnecting: boolean = false; // Guard against concurrent connect() calls
+  private lastConnectTime: number = 0; // For debouncing connect() calls
+  private sessionJoined: boolean = false; // Only send player_update after join_success
   
   // Reconciliation metrics for debugging
   private _reconciliationMetrics = {
@@ -231,13 +236,32 @@ export class ConnectionManager extends EventEmitter {
   
   connect(): void {
     try {
+      // Connection storm prevention: if already connecting or connected, skip
+      if (this.isConnecting) {
+        this.log(LogLevel.INFO, 'Already connecting, skipping duplicate connect() call');
+        return;
+      }
+      if (this.isConnected && this.socket?.readyState === WebSocket.OPEN) {
+        this.log(LogLevel.INFO, 'Already connected, skipping connect() call');
+        return;
+      }
+
+      // Connection debounce: ignore connect() calls within 2 seconds of last connect
+      const now = Date.now();
+      if (now - this.lastConnectTime < 2000) {
+        this.log(LogLevel.INFO, `Debouncing connect() call (${now - this.lastConnectTime}ms since last)`);
+        return;
+      }
+      this.lastConnectTime = now;
+      this.isConnecting = true;
+
       this.log(LogLevel.INFO, 'Connecting to WebSocket server at', this.serverUrl);
-      
+
       // Cleanup any existing socket first
       if (this.socket) {
         this.disconnect();
       }
-      
+
       // Reset offline mode flag for new connection attempt
       this.offlineMode = false;
       this.connectionFailed = false;
@@ -252,6 +276,7 @@ export class ConnectionManager extends EventEmitter {
       }
     } catch (error) {
       this.log(LogLevel.ERROR, 'Error connecting to WebSocket server:', error);
+      this.isConnecting = false;
       // If we failed to connect, attempt reconnect
       this.handleDisconnect();
     }
@@ -331,6 +356,7 @@ export class ConnectionManager extends EventEmitter {
       clearTimeout(connectionTimeout);
       this.log(LogLevel.INFO, 'Connected to server');
       this.isConnected = true;
+      this.isConnecting = false;
       this.reconnectAttempts = 0; // Reset reconnect counter on successful connection
       this.emit('connected');
       
@@ -346,15 +372,17 @@ export class ConnectionManager extends EventEmitter {
     
     this.socket.onclose = (event) => {
       clearTimeout(connectionTimeout);
+      this.isConnecting = false;
       // Log close code and reason
       this.log(LogLevel.INFO, `WebSocket closed with code ${event.code}, reason: ${event.reason || 'No reason given'}`);
-      
+
       // Use our improved handleDisconnect method
       this.handleDisconnect();
     };
     
     this.socket.onerror = (error) => {
       clearTimeout(connectionTimeout);
+      this.isConnecting = false;
       this.handleError(error);
     };
     
@@ -371,31 +399,34 @@ export class ConnectionManager extends EventEmitter {
   disconnect(): void {
     // Clear any pending reconnection attempts
     this.clearReconnectTimeout();
-    
+
     // Stop ping interval
     this.stopPingInterval();
-    
+
     // Stop keep-alive interval
     this.stopKeepAliveInterval();
-    
+
     if (this.socket) {
       // Remove event listeners to prevent any callbacks after disconnect
       this.socket.onopen = null;
       this.socket.onclose = null;
       this.socket.onerror = null;
       this.socket.onmessage = null;
-      
+
       // Only close if socket is not already closing or closed
       if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) {
         this.socket.close();
       }
       this.socket = null;
     }
-    
+
     // Reset player index when disconnected - this ensures new character assignment on reconnect
     this.playerIndex = -1;
-    
+
+    // Reset connection state flags
     this.isConnected = false;
+    this.isConnecting = false;
+    this.sessionJoined = false;
     this.emit('disconnected');
     this.log(LogLevel.INFO, 'Disconnected from server');
   }
@@ -593,6 +624,12 @@ export class ConnectionManager extends EventEmitter {
   }): void {
     if (!this.isReadyToSend()) {
       this.log(LogLevel.WARN, 'Cannot send player update, WebSocket not ready');
+      return;
+    }
+
+    // Don't send player_update before joining session
+    if (!this.sessionJoined && !this.offlineMode) {
+      this.log(LogLevel.WARN, 'Cannot send player update, session not joined yet');
       return;
     }
     
@@ -858,6 +895,11 @@ export class ConnectionManager extends EventEmitter {
       case 'auth_success':
       case 'join_success':
         this.log(LogLevel.INFO, 'Authentication/join successful');
+        // Mark session as joined when we get join_success
+        if (message.type === 'join_success') {
+          this.sessionJoined = true;
+          this.log(LogLevel.INFO, '📣 Session joined, player_update now allowed');
+        }
         if (message.player && message.player.id) {
           this.playerId = message.player.id;
           this.log(LogLevel.INFO, '📣 AUTH_SUCCESS: Set player ID to', this.playerId);

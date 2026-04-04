@@ -685,8 +685,8 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
         }
 
         // Send position to multiplayer system if connected
-        if (connectionManager && connectionManager.isReadyToSend() && 
-            (Date.now() - lastStateTime.current > 50)) { // 20 updates per second
+        if (connectionManager && connectionManager.isReadyToSend() &&
+            (Date.now() - lastStateTime.current > 16)) { // 60 updates per second
             lastStateTime.current = Date.now();
             
             const position = characterRigidBody.translation();

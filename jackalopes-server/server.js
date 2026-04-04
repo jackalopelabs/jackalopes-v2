@@ -243,12 +243,15 @@ function handleClientMessage(clientId, message) {
     }
 }
 
+// Track persistentId -> clientId mapping for graceful reconnection
+const persistentIdMap = new Map();
+
 /**
  * Handle authentication requests
  */
 function handleAuth(clientId, data) {
     const client = clients.get(clientId);
-    
+
     if (!data.playerName) {
         sendToClient(clientId, {
             type: 'error',
@@ -256,14 +259,68 @@ function handleAuth(clientId, data) {
         });
         return;
     }
-    
+
     const playerName = data.playerName.replace(/[^\w\s]/g, '');
-    
-    // Update client data
+    const persistentId = data.persistentId;
+
+    // Graceful reconnection: if this persistentId already has a connection, swap sockets
+    if (persistentId && persistentIdMap.has(persistentId)) {
+        const oldClientId = persistentIdMap.get(persistentId);
+        const oldClient = clients.get(oldClientId);
+
+        if (oldClient && oldClientId !== clientId) {
+            logMessage(`Reconnection detected for persistentId ${persistentId}: swapping client ${oldClientId} -> ${clientId}`);
+
+            // Transfer session membership to new client
+            client.sessionId = oldClient.sessionId;
+            client.playerName = oldClient.playerName || playerName;
+            client.authenticated = true;
+            client.playerId = oldClient.playerId;
+            client.persistentId = persistentId;
+
+            // Update session's player map to point to new clientId
+            if (oldClient.sessionId) {
+                const session = sessions.get(oldClient.sessionId);
+                if (session && session.players.has(oldClient.playerId)) {
+                    session.players.set(oldClient.playerId, clientId);
+                    logMessage(`Session ${oldClient.sessionId}: swapped clientId for player ${oldClient.playerId}`);
+                }
+            }
+
+            // Close the old socket without triggering player_left
+            if (oldClient.socket && !oldClient.socket.destroyed) {
+                oldClient.socket.destroy();
+            }
+            clients.delete(oldClientId);
+
+            // Update persistentId map
+            persistentIdMap.set(persistentId, clientId);
+
+            // Send auth_success with existing playerId
+            sendToClient(clientId, {
+                type: 'auth_success',
+                player: {
+                    id: client.playerId,
+                    name: client.playerName
+                }
+            });
+
+            logMessage(`Client ${clientId} reconnected as ${client.playerName} (swap from ${oldClientId})`);
+            return;
+        }
+    }
+
+    // Normal auth flow for new connections
     client.playerName = playerName;
     client.authenticated = true;
     client.playerId = 'player_' + Math.random().toString(36).substr(2, 9);
-    
+    client.persistentId = persistentId;
+
+    // Track persistentId -> clientId
+    if (persistentId) {
+        persistentIdMap.set(persistentId, clientId);
+    }
+
     sendToClient(clientId, {
         type: 'auth_success',
         player: {
@@ -271,7 +328,7 @@ function handleAuth(clientId, data) {
             name: playerName
         }
     });
-    
+
     logMessage(`Client ${clientId} authenticated as ${playerName}`);
 }
 
@@ -506,16 +563,21 @@ function handleLeaveSession(clientId) {
  */
 function handleDisconnect(clientId) {
     const client = clients.get(clientId);
-    
+
     if (!client) {
         return;
     }
-    
+
+    // Clean up persistentId map
+    if (client.persistentId && persistentIdMap.get(client.persistentId) === clientId) {
+        persistentIdMap.delete(client.persistentId);
+    }
+
     // Handle session leave if in a session
     if (client.sessionId) {
         handleLeaveSession(clientId);
     }
-    
+
     // Remove client
     clients.delete(clientId);
     logMessage(`Client ${clientId} disconnected`);
