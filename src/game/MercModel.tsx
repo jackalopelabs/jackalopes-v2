@@ -103,46 +103,59 @@ export const MercModel = ({
     }
   }, []);
   
-  // Handle animations
+  // Persistent mixer ref so we can cross-fade instead of teardown/rebuild
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+  const activeActionRef = useRef<THREE.AnimationAction | null>(null);
+  const animFrameRef = useRef<number>(0);
+
+  // Create mixer once when model loads
   useEffect(() => {
-    if (!group.current || !animationClips || Object.keys(animationClips).length === 0) return;
-    
-    // Create mixer
+    if (!group.current || !modelLoaded) return;
+
     const mixer = new THREE.AnimationMixer(group.current);
-    let currentAction: THREE.AnimationAction | null = null;
-    
-    // If we have the requested animation
-    if (animation && animationClips[animation]) {
-      currentAction = mixer.clipAction(animationClips[animation]);
-      currentAction.play();
-    } else if (animationClips['idle']) {
-      // Fall back to idle if available and requested animation doesn't exist
-      currentAction = mixer.clipAction(animationClips['idle']);
-      currentAction.play();
-    }
-    
-    // Animation loop
+    mixerRef.current = mixer;
+
     const clock = new THREE.Clock();
-    const animateModel = () => {
-      if (mixer) {
-        mixer.update(clock.getDelta());
-      }
-      requestAnimationFrame(animateModel);
+    const animate = () => {
+      mixer.update(clock.getDelta());
+      animFrameRef.current = requestAnimationFrame(animate);
     };
-    
-    // Start animation loop
-    const animationId = requestAnimationFrame(animateModel);
-    
-    // Cleanup
+    animFrameRef.current = requestAnimationFrame(animate);
+
     return () => {
-      cancelAnimationFrame(animationId);
-      if (currentAction) currentAction.stop();
+      cancelAnimationFrame(animFrameRef.current);
       mixer.stopAllAction();
-      if (group.current) {
-        mixer.uncacheRoot(group.current);
-      }
+      if (group.current) mixer.uncacheRoot(group.current);
+      mixerRef.current = null;
+      activeActionRef.current = null;
     };
-  }, [animation, animationClips, modelLoaded]);
+  }, [modelLoaded]);
+
+  // Cross-fade to requested animation (or hold last pose)
+  useEffect(() => {
+    const mixer = mixerRef.current;
+    if (!mixer || Object.keys(animationClips).length === 0) return;
+
+    // Resolve clip: requested → idle → first available
+    const clip = animationClips[animation]
+      || animationClips['idle']
+      || Object.values(animationClips)[0];
+    if (!clip) return; // no clips at all
+
+    const nextAction = mixer.clipAction(clip);
+    const prev = activeActionRef.current;
+
+    if (prev && prev !== nextAction) {
+      // Cross-fade from previous action
+      nextAction.reset().setEffectiveWeight(1).play();
+      prev.crossFadeTo(nextAction, 0.25, true);
+    } else if (!prev) {
+      nextAction.reset().play();
+    }
+    // If prev === nextAction, it's already playing — do nothing (no T-pose flicker)
+
+    activeActionRef.current = nextAction;
+  }, [animation, animationClips]);
   
   // If there was an error loading the model, show a simplified version as fallback
   if (modelError) {

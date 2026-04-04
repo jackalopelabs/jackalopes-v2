@@ -2275,59 +2275,17 @@ export function App() {
         };
     }, [connectionManager, enableMultiplayer]);
 
-    // Use an effect to get the character type from ConnectionManager when it's ready
-    // ONLY runs if server hasn't already assigned a type
+    // Non-multiplayer: sync characterType from Leva controls
     useEffect(() => {
-        if (serverAssignedType.current) return; // Server is authoritative
-        
-        if (!enableMultiplayer) {
+        if (!enableMultiplayer && !serverAssignedType.current) {
             setPlayerCharacterInfo({
                 type: characterType as 'merc' | 'jackalope',
-                thirdPerson: characterType === 'jackalope' ? true : false
+                thirdPerson: characterType === 'jackalope'
             });
-            return;
         }
-    }, [connectionManager, enableMultiplayer, characterType]);
-
-    // Force characterType to match playerCharacterInfo when it changes
-    useEffect(() => {
-        if (playerCharacterInfo && playerCharacterInfo.type) {
-            // Log the character type change
-            console.log(`Character type set to ${playerCharacterInfo.type} (third-person: ${playerCharacterInfo.thirdPerson})`);
-
-            // If this is a third-person character, force third-person camera setup
-            if (playerCharacterInfo.thirdPerson) {
-                // Manually set up third-person camera
-                console.log('Forcing third-person camera setup for', playerCharacterInfo.type);
-                // The third-person view will be handled by the rendering logic
-            }
-        }
-    }, [playerCharacterInfo]);
-
-    // Ensure we respect the character info when the player index changes
-    // ONLY runs if server hasn't already assigned a type
-    useEffect(() => {
-        if (serverAssignedType.current) return;
-        if (connectionManager && connectionManager.getPlayerIndex() >= 0) {
-            const characterInfo = connectionManager.getPlayerCharacterType();
-            setPlayerCharacterInfo(characterInfo);
-            connectionManager.setPlayerType(characterInfo.type);
-        }
-    }, [connectionManager?.getPlayerIndex?.()]);
-
-    // Add a separate effect to log when the character info changes
-    useEffect(() => {
-        console.log('Player character info updated:', playerCharacterInfo);
-
-        // If this is a third-person character, force third-person view
-        if (playerCharacterInfo.thirdPerson) {
-            // Configure third-person camera
-            console.log('Enabling third-person view for', playerCharacterInfo.type);
-        }
-    }, [playerCharacterInfo]);
+    }, [characterType, enableMultiplayer]);
 
     // Add a conditional class to the body element for dark mode
-    // Add this effect to the App component
     useEffect(() => {
         if (darkMode) {
             document.body.classList.add('dark-mode');
@@ -2342,38 +2300,7 @@ export function App() {
         setSphereDarkMode(darkMode);
     }, [darkMode]);
 
-    // Add an effect to forcibly correct character type based on player index when component mounts
-    useEffect(() => {
-        // Only run this once on component mount
-        console.log('Adding character correction check');
-
-        // Set a timer to check and correct the character type after the player index is assigned
-        const timer = setTimeout(() => {
-            if (connectionManager && connectionManager.getPlayerIndex() >= 0) {
-                // Get the player index
-                const playerIndex = connectionManager.getPlayerIndex();
-                console.log(`Checking if character type matches player index ${playerIndex}`);
-
-                // Get current character info
-                const characterInfo = playerCharacterInfo;
-
-                // Check if the type matches the index parity
-                const expectedType = playerIndex % 2 === 0 ? 'jackalope' : 'merc';
-                if (characterInfo.type !== expectedType) {
-                    console.error(`Character type mismatch! Forcing correction...`);
-                    // Correct the character type
-                    const correctedInfo = connectionManager.resetAndCorrectCharacterType();
-                    setPlayerCharacterInfo(correctedInfo);
-                } else {
-                    console.log(`Character type ${characterInfo.type} correctly matches player index ${playerIndex}`);
-                }
-            }
-        }, 3000); // Check after 3 seconds to allow for player index assignment
-
-        return () => clearTimeout(timer);
-    }, []);
-
-    // Add debug controls for forcing character types
+    // Debug controls for forcing character types
     const debugSettings = useControls('Debug Options', {
         force_merc_fps: {
             value: false,
@@ -2402,75 +2329,27 @@ export function App() {
         order: 990
     });
 
-    // Listen for debug option changes - handle merc
+    // Debug force character type overrides
     useEffect(() => {
-        if (debugSettings.force_merc_fps && enableMultiplayer) {
-            console.log("Debug: Forcing merc character with FPS view");
-
-            // Log debug info
-            console.log("[DEBUG] Force Merc FPS mode activated");
-
-            // Set character type to merc
-            setPlayerCharacterInfo({
-                type: 'merc',
-                thirdPerson: false
-            });
-
-            // Update connection manager if available
-            if (connectionManager) {
-                // Use the correct method name
-                connectionManager.setPlayerType('merc');
-            }
-
-            // Function to trigger camera reset and dispatch the event
-            const triggerCameraReset = () => {
-                console.log("[DEBUG] Dispatching camera update needed event");
-                window.dispatchEvent(new CustomEvent('cameraUpdateNeeded'));
-            };
-
-            // Call immediately and also with various delays for reliability
-            triggerCameraReset();
-            setTimeout(triggerCameraReset, 100);
-            setTimeout(triggerCameraReset, 300);
-            setTimeout(triggerCameraReset, 1000);
-
-            // Also force a reset of the FPS arms
-            const forceArmsReset = () => {
-                console.log("[DEBUG] Dispatching force arms reset event");
-                window.dispatchEvent(new CustomEvent('forceArmsReset'));
-            };
-
-            // Call with delays for reliability
-            forceArmsReset();
-            setTimeout(forceArmsReset, 300);
-            setTimeout(forceArmsReset, 1000);
+        if (!enableMultiplayer) return;
+        if (debugSettings.force_merc_fps) {
+            urlRoleLocked.current = false; // allow debug override
+            serverAssignedType.current = false;
+            setPlayerCharacterInfo({ type: 'merc', thirdPerson: false });
+            if (connectionManager) connectionManager.setPlayerType('merc');
+            window.dispatchEvent(new CustomEvent('cameraUpdateNeeded'));
+            window.dispatchEvent(new CustomEvent('forceArmsReset'));
         }
     }, [debugSettings.force_merc_fps, enableMultiplayer, connectionManager]);
 
-    // Listen for debug option changes - handle jackalope
     useEffect(() => {
-        if (debugSettings.force_jackalope_third && enableMultiplayer) {
-            console.log("Debug: Forcing jackalope character with third person view");
-
-            // Log debug info
-            console.log("[DEBUG] Force Jackalope mode activated");
-
-            // Set character type to jackalope
-            setPlayerCharacterInfo({
-                type: 'jackalope',
-                thirdPerson: true
-            });
-
-            // Update connection manager if available
-            if (connectionManager) {
-                connectionManager.setPlayerType('jackalope');
-            }
-
-            // Just make sure camera is updated appropriately
-            setTimeout(() => {
-                console.log("[DEBUG] Dispatching camera update for jackalope");
-                window.dispatchEvent(new CustomEvent('cameraUpdateNeeded'));
-            }, 100);
+        if (!enableMultiplayer) return;
+        if (debugSettings.force_jackalope_third) {
+            urlRoleLocked.current = false;
+            serverAssignedType.current = false;
+            setPlayerCharacterInfo({ type: 'jackalope', thirdPerson: true });
+            if (connectionManager) connectionManager.setPlayerType('jackalope');
+            window.dispatchEvent(new CustomEvent('cameraUpdateNeeded'));
         }
     }, [debugSettings.force_jackalope_third, enableMultiplayer, connectionManager]);
 
@@ -2504,119 +2383,14 @@ export function App() {
         }
     }, [debugSettings.debugLevel, connectionManager]);
 
-    // Add an effect to force arms reset on initial load
+    // Force arms reset on initial load
     useEffect(() => {
-        // Only do this once on component mount
-        const initialLoadTimer = setTimeout(() => {
-            console.log("[App] Initial load complete, forcing arms reset");
-            // Dispatch force arms reset event
+        const timer = setTimeout(() => {
             window.dispatchEvent(new CustomEvent('forceArmsReset'));
-
-            // Also make sure camera is updated
             window.dispatchEvent(new CustomEvent('cameraUpdateNeeded'));
-        }, 1500); // Give extra time for everything to initialize
-
-        return () => clearTimeout(initialLoadTimer);
-    }, []); // Empty dependency array means this runs once on mount
-
-    // Add character correction check
-    useEffect(() => {
-        // Add a check to correct character type based on player index
-        // This ensures players are properly assigned as merc/jackalope
-        const checkCharacterCorrection = () => {
-            // Skip correction if server already assigned type
-            if (serverAssignedType.current) {
-                return;
-            }
-            // Skip correction if disabled in debug settings
-            if (debugSettings.disable_character_correction) {
-                console.log('[DEBUG] Character auto-correction disabled');
-                return;
-            }
-
-            // Skip correction if force_merc_fps is enabled
-            if (debugSettings.force_merc_fps) {
-                console.log('[DEBUG] Character auto-correction skipped (force_merc_fps active)');
-                return;
-            }
-
-            if (!connectionManager) return;
-
-            const playerIndex = connectionManager.getPlayerIndex();
-            console.log(`Checking if character type matches player index ${playerIndex}`);
-
-            if (playerIndex < 0) return; // Skip if no player index assigned
-
-            // Get correct character for this player index
-            const correctCharacter = connectionManager.getPlayerCharacterType();
-
-            // Check if current character matches the correct assignment
-            if (playerCharacterInfo.type !== correctCharacter.type ||
-                playerCharacterInfo.thirdPerson !== correctCharacter.thirdPerson) {
-
-                console.error('Character type mismatch! Forcing correction...');
-                console.error('🔄 Forcing character type correction based on player index');
-                console.error(`🔄 Reset character to ${correctCharacter.type.toUpperCase()} (index: ${playerIndex}, third-person: ${correctCharacter.thirdPerson})`);
-
-                // Apply correction
-                setPlayerCharacterInfo(correctCharacter);
-
-                // Set player type in connection manager for network updates
-                connectionManager.setPlayerType(correctCharacter.type);
-            } else {
-                console.log(`Character type ${playerCharacterInfo.type} correctly matches player index ${playerIndex}`);
-            }
-        };
-
-        console.log('Adding character correction check');
-
-        // Check for correct character assignment periodically
-        if (enableMultiplayer) {
-            const interval = setInterval(checkCharacterCorrection, 5000);
-            // Also check immediately
-            setTimeout(checkCharacterCorrection, 500);
-
-            return () => clearInterval(interval);
-        }
-    }, [enableMultiplayer, connectionManager, playerCharacterInfo.type, playerCharacterInfo.thirdPerson, debugSettings.disable_character_correction, debugSettings.force_merc_fps]);
-
-    // Add this effect to update playerCharacterInfo when characterType changes in non-multiplayer mode
-    useEffect(() => {
-        if (!enableMultiplayer) {
-            console.log(`Manual character selection changed to: ${characterType}`);
-            setPlayerCharacterInfo({
-                type: characterType as 'merc' | 'jackalope',
-                thirdPerson: characterType === 'jackalope' ? true : false
-            });
-        }
-    }, [characterType, enableMultiplayer]);
-
-    // Update third person view when debug settings change
-    useEffect(() => {
-        if (debugSettings.force_merc_fps && enableMultiplayer) {
-            console.log("[DEBUG] Force merc FPS mode enabled");
-            // Set character to merc (mercenary) type
-            setPlayerCharacterInfo({
-                type: 'merc',
-                thirdPerson: false
-            });
-
-            // Trigger a camera update event multiple times for reliability
-            const triggerCameraReset = () => {
-                console.log("[DEBUG] Dispatching camera update event...");
-                window.dispatchEvent(new CustomEvent('cameraUpdateNeeded'));
-            };
-
-            // Trigger immediately and with delays for reliability
-            triggerCameraReset();
-            setTimeout(triggerCameraReset, 100);
-            setTimeout(triggerCameraReset, 300);
-            setTimeout(triggerCameraReset, 1000);
-
-            // Also force a reload of FPS arms if needed
-            window.dispatchEvent(new CustomEvent('forceArmsReset'));
-        }
-    }, [debugSettings.force_merc_fps, enableMultiplayer, connectionManager]);
+        }, 1500);
+        return () => clearTimeout(timer);
+    }, []);
 
     // Handle forceDarkLevel changes - reset arms position for visibility in dark environments
     useEffect(() => {

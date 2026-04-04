@@ -1839,7 +1839,8 @@ export const MultiplayerManager: React.FC<{
             isRunning,
             // Explicitly preserve the existing player type
             playerType: existingPlayerType,
-            flashlightOn
+            flashlightOn,
+            cameraPitch: data.state?.cameraPitch ?? existingPlayer.cameraPitch ?? 0
           }
         };
       });

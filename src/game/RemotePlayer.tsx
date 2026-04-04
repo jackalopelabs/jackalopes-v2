@@ -662,6 +662,38 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     const attachedProjectilesRef = useRef<{id: string, position: THREE.Vector3}[]>([]);
     const rigidBodyRef = useRef<any>(null);
     
+    // Smooth position interpolation ref for jackalope
+    const jackalopeSmoothedPos = useRef(new THREE.Vector3(position?.x || 0, position?.y || 0, position?.z || 0));
+    const jackalopeCurrentRotation = useRef(rotation || 0);
+
+    // Interpolate position & rotation for remote jackalope every frame
+    useFrame((_, delta) => {
+      if (!rigidBodyRef.current) return;
+      if (!position || typeof position.x !== 'number') return;
+
+      const targetPos = new THREE.Vector3(position.x, position.y + 0.3, position.z);
+      const dist = jackalopeSmoothedPos.current.distanceTo(targetPos);
+
+      // Adaptive lerp speed based on distance
+      let speed: number;
+      if (dist > 5) speed = 1.0;           // Snap
+      else if (dist > 2) speed = Math.min(1, delta * 15);
+      else if (dist > 0.5) speed = Math.min(1, delta * 10);
+      else speed = Math.min(1, delta * 8);
+
+      jackalopeSmoothedPos.current.lerp(targetPos, speed);
+      rigidBodyRef.current.setNextKinematicTranslation(
+        { x: jackalopeSmoothedPos.current.x, y: jackalopeSmoothedPos.current.y, z: jackalopeSmoothedPos.current.z }
+      );
+
+      // Smooth rotation
+      const targetRot = (rotation || 0) + Math.PI;
+      const rotSpeed = Math.min(delta * 15, 0.5);
+      jackalopeCurrentRotation.current = THREE.MathUtils.lerp(jackalopeCurrentRotation.current, targetRot, rotSpeed);
+      const quat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), jackalopeCurrentRotation.current);
+      rigidBodyRef.current.setNextKinematicRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
+    });
+
     // Add state for managing hit and respawn
     const [isHit, setIsHit] = useState(false);
     const [isRespawning, setIsRespawning] = useState(false);
@@ -981,7 +1013,7 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
       <>
         <RigidBody 
           ref={rigidBodyRef}
-          type="fixed" 
+          type="kinematicPosition" 
           position={position ? [position.x, position.y + 0.3, position.z] : [0, 0.3, 0]}
           rotation={[0, (rotation || 0) + Math.PI, 0]}
           colliders={false}
