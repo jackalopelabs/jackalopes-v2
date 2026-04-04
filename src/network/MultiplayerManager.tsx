@@ -1769,26 +1769,36 @@ export const MultiplayerManager: React.FC<{
         lastUpdate: now,
       };
 
-      // *** COLD PATH: only trigger React for structural changes (new player) ***
+      // *** COLD PATH: React re-render for new player OR playerType correction ***
+      const incomingType = data.playerType || data.state?.playerType || null;
       setRemotePlayers(prev => {
-        if (prev[data.id]) return prev; // Already known — skip re-render
-
-        console.log(`Adding player ${data.id} from update - wasn't in our list`);
-        const newPlayerType = data.playerType || data.state?.playerType || 'merc';
-        console.log(`🧩 New player ${data.id} assigned type: ${newPlayerType}`);
+        const existing = prev[data.id];
+        
+        // If player exists AND type matches (or no new type info), skip re-render
+        if (existing && (!incomingType || existing.playerType === incomingType)) return prev;
+        
+        // Either new player or type correction needed
+        const newPlayerType = incomingType || existing?.playerType || 'merc';
+        if (existing) {
+          console.log(`🔄 Correcting player ${data.id} type: ${existing.playerType} → ${newPlayerType}`);
+        } else {
+          console.log(`🧩 New player ${data.id} assigned type: ${newPlayerType}`);
+        }
 
         return {
           ...prev,
           [data.id]: {
-            playerId: data.id,
-            position,
-            rotation,
-            lastUpdate: now,
+            ...(existing || {
+              playerId: data.id,
+              position,
+              rotation,
+              lastUpdate: now,
+              isMoving: false,
+              isRunning: false,
+              isShooting: false,
+              flashlightOn,
+            }),
             playerType: newPlayerType,
-            isMoving: false,
-            isRunning: false,
-            isShooting: false,
-            flashlightOn,
           }
         };
       });
