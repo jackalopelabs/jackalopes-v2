@@ -1149,13 +1149,14 @@ export const useMultiplayer = (
     // Connect to the server
     connectionManager.connect();
     
-    // Debug log to check connection status after 5 seconds (no auto-reconnect to prevent storm)
+    // Add a debug log to check connection status after 5 seconds
     setTimeout(() => {
       console.log("🔍 MULTIPLAYER CONNECTION STATUS (after 5s):");
       console.log("- IsConnected:", isConnected);
       console.log("- Remote players:", Object.keys(remotePlayers).length);
       console.log("- Server URL:", connectionManager.getServerUrl());
       console.log("- Socket state:", connectionManager.isReadyToSend() ? "READY" : "NOT_READY");
+      
       // Auto-reconnect removed to prevent connection storm
     }, 5000);
     
@@ -1468,33 +1469,12 @@ export const RemotePlayers = React.memo(({
     console.log(`RemotePlayers rendering #${renderCount.current} with ${Object.keys(players).length} players`);
   }
   
-  // DEBUG: render overlay showing remote player count + live data
-  useEffect(() => {
-    let div = document.getElementById('debug-remote-overlay');
-    if (!div) {
-      div = document.createElement('div');
-      div.id = 'debug-remote-overlay';
-      div.style.cssText = 'position:fixed;top:10px;left:10px;background:rgba(0,0,0,0.8);color:lime;font:12px monospace;padding:8px;z-index:99999;pointer-events:none;max-width:400px;';
-      document.body.appendChild(div);
-    }
-    const interval = setInterval(() => {
-      const entries = Object.entries(players);
-      const liveStore = (window as any).__livePlayerData || {};
-      div!.innerHTML = `Remote players: ${entries.length}<br>` + entries.map(([id, p]) => {
-        const live = liveStore[id];
-        const pos = live?.position || p.position;
-        return `${id.slice(-6)}: ${p.playerType} pos=(${pos?.x?.toFixed(1)},${pos?.y?.toFixed(1)},${pos?.z?.toFixed(1)})`;
-      }).join('<br>');
-    }, 200);
-    return () => { clearInterval(interval); div?.remove(); };
-  });
-
   return (
     <>
       {Object.entries(players).filter(([id]) => id && id !== 'undefined')
         .map(([id, playerData]) => (
         <RemotePlayer
-          key={`${id}-${playerData.playerType || 'merc'}`}
+          key={id}
           playerId={id}
           position={playerData.position}
           rotation={playerData.rotation}
@@ -1596,13 +1576,14 @@ export const MultiplayerManager: React.FC<{
     // Connect to the server
     connectionManager.connect();
     
-    // Debug log to check connection status after 5 seconds (no auto-reconnect to prevent storm)
+    // Add a debug log to check connection status after 5 seconds
     setTimeout(() => {
       console.log("🔍 MULTIPLAYER CONNECTION STATUS (after 5s):");
       console.log("- IsConnected:", isConnected);
       console.log("- Remote players:", Object.keys(remotePlayers).length);
       console.log("- Server URL:", connectionManager.getServerUrl());
       console.log("- Socket state:", connectionManager.isReadyToSend() ? "READY" : "NOT_READY");
+      
       // Auto-reconnect removed to prevent connection storm
     }, 5000);
     
@@ -1720,13 +1701,6 @@ export const MultiplayerManager: React.FC<{
       if (data.id === connectionManager.getPlayerId() || !data.id || data.id === 'undefined') {
         return;
       }
-      // DEBUG: log first 5 updates per player
-      if (!((window as any).__debugUpdateCount)) (window as any).__debugUpdateCount = {};
-      const dc = (window as any).__debugUpdateCount;
-      dc[data.id] = (dc[data.id] || 0) + 1;
-      if (dc[data.id] <= 5) {
-        console.log(`[MM handlePlayerUpdate] id=${data.id}, pos=${JSON.stringify(data.position)}, hasState=${!!data.state}, statePos=${JSON.stringify(data.state?.position)}`);
-      }
 
       const now = Date.now();
 
@@ -1769,36 +1743,26 @@ export const MultiplayerManager: React.FC<{
         lastUpdate: now,
       };
 
-      // *** COLD PATH: React re-render for new player OR playerType correction ***
-      const incomingType = data.playerType || data.state?.playerType || null;
+      // *** COLD PATH: only trigger React for structural changes (new player) ***
       setRemotePlayers(prev => {
-        const existing = prev[data.id];
-        
-        // If player exists AND type matches (or no new type info), skip re-render
-        if (existing && (!incomingType || existing.playerType === incomingType)) return prev;
-        
-        // Either new player or type correction needed
-        const newPlayerType = incomingType || existing?.playerType || 'merc';
-        if (existing) {
-          console.log(`🔄 Correcting player ${data.id} type: ${existing.playerType} → ${newPlayerType}`);
-        } else {
-          console.log(`🧩 New player ${data.id} assigned type: ${newPlayerType}`);
-        }
+        if (prev[data.id]) return prev; // Already known — skip re-render
+
+        console.log(`Adding player ${data.id} from update - wasn't in our list`);
+        const newPlayerType = data.playerType || data.state?.playerType || 'merc';
+        console.log(`🧩 New player ${data.id} assigned type: ${newPlayerType}`);
 
         return {
           ...prev,
           [data.id]: {
-            ...(existing || {
-              playerId: data.id,
-              position,
-              rotation,
-              lastUpdate: now,
-              isMoving: false,
-              isRunning: false,
-              isShooting: false,
-              flashlightOn,
-            }),
+            playerId: data.id,
+            position,
+            rotation,
+            lastUpdate: now,
             playerType: newPlayerType,
+            isMoving: false,
+            isRunning: false,
+            isShooting: false,
+            flashlightOn,
           }
         };
       });
