@@ -1162,9 +1162,13 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
               {/* Extra collider to catch projectiles */}
               <BallCollider args={[2.4]} position={[0, 1.6, 0]} sensor={false} friction={1} restitution={0.1} />
               
-              {/* Use primitive for the model — offset to ground model feet at physics Y */}
+              {/* Model offset: physics Y is capsule center (~2.24 on ground).
+                 Local jackalope renders at physicsY - 0.65 with capsule offset -0.65.
+                 Capsule half-height=1.0 + radius=0.5 = 1.5 below center.
+                 So feet = physicsY - 0.65 - 1.5 = physicsY - 2.15.
+                 Remote model inside RigidBody at physicsY, so offset = -2.15 */}
               <JackalopeModel 
-                position={[0, -1.0, 0]} 
+                position={[0, -2.15, 0]} 
                 rotation={[0, 0, 0]} 
                 scale={[2, 2, 2]}
               />

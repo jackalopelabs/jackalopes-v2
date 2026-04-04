@@ -113,5 +113,13 @@ re-reads it because memo blocks re-renders.
 7. Build, test, commit
 
 ## Git State
-Current HEAD: `e089c93` — clean baseline with connection fixes only.
-Safe to reset to: `dbf825d` if needed (last state before tonight's remote player changes, but also before connection fixes).
+Current HEAD: `6daaf6b` — all multiplayer bugs fixed, timer synced, jackalope grounded.
+Safe to reset to: `e089c93` if needed (pre-fix baseline with connection fixes only).
+
+## Session Log (2026-04-04)
+- `8cafe59` — Bug 1 (wrong model), Bug 2 (frozen merc), Bug 3 (rotation glitch)
+- `7a48548` — THE FIX: read live store inside useFrame, not at render time (memoized component stale-read)
+- `b784a48` — Documented the stale-read bug
+- `6cf0213` — Floating jackalope Y offset + server-synced match timer
+- `7353cdb` — Jackalope model offset tuning (-0.65)
+- `6daaf6b` — Final jackalope offset (-1.0), removed debug log
