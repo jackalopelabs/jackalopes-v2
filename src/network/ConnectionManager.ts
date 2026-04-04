@@ -1020,6 +1020,15 @@ export class ConnectionManager extends EventEmitter {
       case 'player_update':
         this.handlePlayerUpdate(message);
         break;
+
+      case 'match_timer':
+        this.log(LogLevel.INFO, '⏱️ match_timer from server:', message);
+        this.emit('match_timer', {
+          matchStartTime: message.matchStartTime,
+          matchDuration: message.matchDuration,
+          serverTime: message.serverTime
+        });
+        break;
         
       default:
         this.log(LogLevel.WARN, 'Unknown message type:', message.type);

@@ -781,7 +781,7 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
       const latestPos = jackalopePositionRef.current;
       if (!latestPos) return;
 
-      const targetPos = new THREE.Vector3(latestPos.x, latestPos.y + 0.3, latestPos.z);
+      const targetPos = new THREE.Vector3(latestPos.x, latestPos.y, latestPos.z);
       const dist = jackalopeSmoothedPos.current.distanceTo(targetPos);
 
       // Aggressive lerp — prioritise low latency over buttery smoothness
@@ -1127,7 +1127,7 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
         <RigidBody 
           ref={rigidBodyRef}
           type="kinematicPosition" 
-          position={position ? [position.x, position.y + 0.3, position.z] : [0, 0.3, 0]}
+          position={position ? [position.x, position.y, position.z] : [0, 0, 0]}
           rotation={[0, (rotation || 0) + Math.PI, 0]}
           colliders={false}
           name={`remote-jackalope-${playerId}`}
