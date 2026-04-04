@@ -411,7 +411,8 @@ function handleJoinSession(clientId, data) {
                 player: {
                     id: client.playerId,
                     name: client.playerName
-                }
+                },
+                playerType: client.playerType
             });
         }
     }

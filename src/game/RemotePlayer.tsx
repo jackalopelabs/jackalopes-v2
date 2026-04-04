@@ -646,8 +646,10 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
       x: mercSmoothedPos.current.x, y: mercSmoothedPos.current.y, z: mercSmoothedPos.current.z
     });
 
+    // Merc model faces -Z by default, so add PI to face the camera direction
+    const targetRot = latestRot + Math.PI;
     // Angle-wrap aware lerp to prevent spinning the long way around at ±π boundary
-    let angleDiff = latestRot - mercCurrentRotation.current;
+    let angleDiff = targetRot - mercCurrentRotation.current;
     // Normalize to [-π, π]
     while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
     while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
