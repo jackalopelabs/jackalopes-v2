@@ -462,7 +462,7 @@ export const useMultiplayer = (
       console.log(`Adding new remote player: ${data.id}`);
       
       // Get player type from the server data if available, or use a determinate assignment based on player count
-      let playerType = data.state?.playerType || data.playerType || 'unknown';
+      let playerType = data.playerType || data.state?.playerType || 'unknown';
       
       // If we don't have a specific player type from the server
       if (playerType === 'unknown') {
@@ -1468,6 +1468,27 @@ export const RemotePlayers = React.memo(({
     console.log(`RemotePlayers rendering #${renderCount.current} with ${Object.keys(players).length} players`);
   }
   
+  // DEBUG: render overlay showing remote player count + live data
+  useEffect(() => {
+    let div = document.getElementById('debug-remote-overlay');
+    if (!div) {
+      div = document.createElement('div');
+      div.id = 'debug-remote-overlay';
+      div.style.cssText = 'position:fixed;top:10px;left:10px;background:rgba(0,0,0,0.8);color:lime;font:12px monospace;padding:8px;z-index:99999;pointer-events:none;max-width:400px;';
+      document.body.appendChild(div);
+    }
+    const interval = setInterval(() => {
+      const entries = Object.entries(players);
+      const liveStore = (window as any).__livePlayerData || {};
+      div!.innerHTML = `Remote players: ${entries.length}<br>` + entries.map(([id, p]) => {
+        const live = liveStore[id];
+        const pos = live?.position || p.position;
+        return `${id.slice(-6)}: ${p.playerType} pos=(${pos?.x?.toFixed(1)},${pos?.y?.toFixed(1)},${pos?.z?.toFixed(1)})`;
+      }).join('<br>');
+    }, 200);
+    return () => { clearInterval(interval); div?.remove(); };
+  });
+
   return (
     <>
       {Object.entries(players).filter(([id]) => id && id !== 'undefined')
@@ -1617,7 +1638,7 @@ export const MultiplayerManager: React.FC<{
       console.log(`Adding new remote player: ${data.id}`);
       
       // Get player type from the server data if available, or use a determinate assignment based on player count
-      let playerType = data.state?.playerType || data.playerType || 'unknown';
+      let playerType = data.playerType || data.state?.playerType || 'unknown';
       
       // If we don't have a specific player type from the server
       if (playerType === 'unknown') {
@@ -1698,6 +1719,13 @@ export const MultiplayerManager: React.FC<{
       // Skip updates from ourselves or with undefined IDs
       if (data.id === connectionManager.getPlayerId() || !data.id || data.id === 'undefined') {
         return;
+      }
+      // DEBUG: log first 5 updates per player
+      if (!((window as any).__debugUpdateCount)) (window as any).__debugUpdateCount = {};
+      const dc = (window as any).__debugUpdateCount;
+      dc[data.id] = (dc[data.id] || 0) + 1;
+      if (dc[data.id] <= 5) {
+        console.log(`[MM handlePlayerUpdate] id=${data.id}, pos=${JSON.stringify(data.position)}, hasState=${!!data.state}, statePos=${JSON.stringify(data.state?.position)}`);
       }
 
       const now = Date.now();

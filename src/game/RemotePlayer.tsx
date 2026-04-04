@@ -189,24 +189,26 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
   const latestIsRunningRef = useRef<boolean>(isRunning || false);
   const latestFlashlightRef = useRef<boolean>(flashlightOn || false);
 
-  // Sync from live store every render (synchronous, before useFrame)
-  const liveStore = (window as any).__livePlayerData;
-  const live = liveStore?.[playerId];
-  if (live) {
-    latestPositionRef.current = live.position;
-    latestRotationRef.current = live.rotation;
-    latestCameraPitchRef.current = live.cameraPitch;
-    latestIsMovingRef.current = live.isMoving;
-    latestIsRunningRef.current = live.isRunning;
-    latestFlashlightRef.current = live.flashlightOn;
-  } else {
-    latestPositionRef.current = position;
-    latestRotationRef.current = rotation || 0;
-    latestCameraPitchRef.current = cameraPitch;
-    latestIsMovingRef.current = isMoving || false;
-    latestIsRunningRef.current = isRunning || false;
-    latestFlashlightRef.current = flashlightOn || false;
-  }
+  // NUCLEAR FIX: Directly apply live store position to the group every frame.
+  // This bypasses all interpolation/ref indirection that was causing frozen positions.
+  useFrame(() => {
+    const liveStore = (window as any).__livePlayerData;
+    const live = liveStore?.[playerId];
+    if (live) {
+      latestPositionRef.current = live.position;
+      latestRotationRef.current = live.rotation;
+      latestCameraPitchRef.current = live.cameraPitch;
+      latestIsMovingRef.current = live.isMoving;
+      latestIsRunningRef.current = live.isRunning;
+      latestFlashlightRef.current = live.flashlightOn;
+
+      // Direct position/rotation application to the GROUP (the root scene node)
+      if (groupRef.current && live.position) {
+        groupRef.current.position.set(live.position.x, live.position.y, live.position.z);
+        groupRef.current.rotation.y = live.rotation || 0;
+      }
+    }
+  });
   
   const MIN_ANIMATION_CHANGE_INTERVAL = 200; // ms
   
@@ -616,12 +618,51 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     return new THREE.Mesh(geometry, material);
   };
 
-  // For merc type, use the MercModel
+  // For merc type, use the MercModel with kinematic RigidBody (like jackalope branch)
+  const mercRigidBodyRef = useRef<any>(null);
+  const mercSmoothedPos = useRef(new THREE.Vector3(position?.x || 0, position?.y || 0, position?.z || 0));
+  const mercCurrentRotation = useRef(rotation || 0);
+
+  // Kinematic position sync for remote merc — reads live store every frame
+  useFrame((_, delta) => {
+    if (playerType !== 'merc' || !mercRigidBodyRef.current) return;
+    const liveStore = (window as any).__livePlayerData;
+    const live = liveStore?.[playerId];
+    const latestPos = live?.position || latestPositionRef.current;
+    const latestRot = live?.rotation ?? latestRotationRef.current;
+    if (!latestPos) return;
+
+    const targetPos = new THREE.Vector3(latestPos.x, latestPos.y - 1.6, latestPos.z);
+    const dist = mercSmoothedPos.current.distanceTo(targetPos);
+
+    let speed: number;
+    if (dist > 5) speed = 1.0;
+    else if (dist > 2) speed = Math.min(1, delta * 20);
+    else if (dist > 0.1) speed = Math.min(1, delta * 15);
+    else speed = Math.min(1, delta * 12);
+
+    mercSmoothedPos.current.lerp(targetPos, speed);
+    mercRigidBodyRef.current.setNextKinematicTranslation({
+      x: mercSmoothedPos.current.x, y: mercSmoothedPos.current.y, z: mercSmoothedPos.current.z
+    });
+
+    // Angle-wrap aware lerp to prevent spinning the long way around at ±π boundary
+    let angleDiff = latestRot - mercCurrentRotation.current;
+    // Normalize to [-π, π]
+    while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+    while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+    const rotSpeed = Math.min(delta * 20, 0.5);
+    mercCurrentRotation.current += angleDiff * rotSpeed;
+    const quat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), mercCurrentRotation.current);
+    mercRigidBodyRef.current.setNextKinematicRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
+  });
+
   if (playerType === 'merc') {
     return (
       <>
         <RigidBody 
-          type="fixed" 
+          ref={mercRigidBodyRef}
+          type="kinematicPosition"
           position={position ? [position.x, position.y - 1.6, position.z] : [0, -1.6, 0]}
           rotation={[0, rotation || 0, 0]}
           colliders={false}
@@ -630,19 +671,13 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
           friction={1}
           sensor={false}
           includeInvisible={true}
-          ccd={true} // Add continuous collision detection
-          collisionGroups={0xFFFFFFFF} // Collide with everything
+          ccd={true}
+          collisionGroups={0xFFFFFFFF}
         >
-          {/* Use multiple colliders for better hit detection - scale up for larger model */}
           <CapsuleCollider args={[7.5, 4]} position={[0, 7.5, 0]} sensor={false} />
-          
-          {/* Add a box collider to ensure hits register */}
           <CuboidCollider args={[4, 7.5, 4]} position={[0, 7.5, 0]} sensor={false} />
-          
-          {/* Add a collider for the head area */}
           <BallCollider args={[3]} position={[0, 12.5, 0]} sensor={false} />
           
-          {/* Use primitive for the model */}
           <MercModel 
             position={[0, 0, 0]} 
             rotation={[0, 0, 0]} 
