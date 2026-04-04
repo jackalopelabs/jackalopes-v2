@@ -315,6 +315,7 @@ function handleAuth(clientId, data) {
     client.authenticated = true;
     client.playerId = 'player_' + Math.random().toString(36).substr(2, 9);
     client.persistentId = persistentId;
+    client.playerType = data.playerType || null; // Store playerType from auth if provided
 
     // Track persistentId -> clientId
     if (persistentId) {
@@ -386,6 +387,24 @@ function handleJoinSession(clientId, data) {
     
     const session = sessions.get(sessionId);
     
+    // Store preferredRole from join request as playerType
+    if (data.preferredRole) {
+        client.playerType = data.preferredRole;
+    }
+    
+    // Auto-assign playerType if not set: balance teams
+    if (!client.playerType) {
+        let mercCount = 0;
+        let jackalopeCount = 0;
+        for (const [pid, cid] of session.players.entries()) {
+            const c = clients.get(cid);
+            if (c && c.playerType === 'merc') mercCount++;
+            else if (c && c.playerType === 'jackalope') jackalopeCount++;
+        }
+        client.playerType = mercCount <= jackalopeCount ? 'merc' : 'jackalope';
+        logMessage(`Auto-assigned playerType '${client.playerType}' to ${client.playerName} (mercs=${mercCount}, jackalopes=${jackalopeCount})`);
+    }
+    
     // Add player to session
     session.players.set(client.playerId, clientId);
     client.sessionId = sessionId;
@@ -400,7 +419,8 @@ function handleJoinSession(clientId, data) {
         player: {
             id: client.playerId,
             name: client.playerName
-        }
+        },
+        playerType: client.playerType
     });
     
     // Notify other players in session

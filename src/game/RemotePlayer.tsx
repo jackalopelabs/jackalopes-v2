@@ -165,6 +165,8 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
   
   const groupRef = useRef<THREE.Group>(null);
   const meshRef = useRef<THREE.Mesh>(null);
+  const mercRigidBodyRef = useRef<any>(null);
+  const mercSmoothedPos = useRef(new THREE.Vector3(position?.x || 0, position?.y || 0, position?.z || 0));
   const spotlightRef = useRef<THREE.SpotLight>(null);
   const spotlightTargetRef = useRef<THREE.Object3D>(null);
   const flashlightGroupRef = useRef<THREE.Group>(null);
@@ -511,17 +513,47 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
       // we can directly apply it to the Y axis rotation
       const targetRotation = playerType === 'jackalope' ? rotation + Math.PI : rotation;
       
-      // Smoothly interpolate to the target rotation
-      // Use a fast lerp for responsive rotation updates
-      const rotationSpeed = Math.min(delta * 15, 0.5); // Faster rotation, limited to 50% per frame
+      // Smoothly interpolate to the target rotation with angle wrapping
+      const rotationSpeed = Math.min(delta * 15, 0.5);
       
-      // Set rotation directly on the mesh, now using a simpler approach
-      meshRef.current.rotation.y = THREE.MathUtils.lerp(
-        meshRef.current.rotation.y,
-        targetRotation,
-        rotationSpeed
-      );
+      // Angle-wrap aware interpolation to avoid spinning the long way around
+      let rotDiff = targetRotation - meshRef.current.rotation.y;
+      while (rotDiff > Math.PI) rotDiff -= 2 * Math.PI;
+      while (rotDiff < -Math.PI) rotDiff += 2 * Math.PI;
+      meshRef.current.rotation.y += rotDiff * rotationSpeed;
     }
+  });
+
+  // Update merc RigidBody kinematically from live store (Bug 2 fix)
+  useFrame((_, delta) => {
+    if (playerType !== 'merc' || !mercRigidBodyRef.current) return;
+    const pos = latestPositionRef.current;
+    const rot = latestRotationRef.current;
+    if (!pos) return;
+
+    // Smooth position interpolation
+    const targetPos = new THREE.Vector3(pos.x, pos.y - 1.6, pos.z);
+    const dist = mercSmoothedPos.current.distanceTo(targetPos);
+    let speed: number;
+    if (dist > 5) speed = 1.0;
+    else if (dist > 2) speed = Math.min(1, delta * 15);
+    else if (dist > 0.1) speed = Math.min(1, delta * 10);
+    else speed = Math.min(1, delta * 8);
+    mercSmoothedPos.current.lerp(targetPos, speed);
+    mercRigidBodyRef.current.setNextKinematicTranslation({
+      x: mercSmoothedPos.current.x,
+      y: mercSmoothedPos.current.y,
+      z: mercSmoothedPos.current.z
+    });
+
+    // Smooth rotation with angle wrapping
+    const targetRot = rot || 0;
+    let rotDiff = targetRot - currentRotation.current;
+    while (rotDiff > Math.PI) rotDiff -= 2 * Math.PI;
+    while (rotDiff < -Math.PI) rotDiff += 2 * Math.PI;
+    currentRotation.current += rotDiff * Math.min(delta * 15, 0.5);
+    const quat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), currentRotation.current);
+    mercRigidBodyRef.current.setNextKinematicRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
   });
 
   // Initialize flashlight when component mounts or flashlight state changes
@@ -621,7 +653,8 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     return (
       <>
         <RigidBody 
-          type="fixed" 
+          ref={mercRigidBodyRef}
+          type="kinematicPosition" 
           position={position ? [position.x, position.y - 1.6, position.z] : [0, -1.6, 0]}
           rotation={[0, rotation || 0, 0]}
           colliders={false}
@@ -630,8 +663,8 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
           friction={1}
           sensor={false}
           includeInvisible={true}
-          ccd={true} // Add continuous collision detection
-          collisionGroups={0xFFFFFFFF} // Collide with everything
+          ccd={true}
+          collisionGroups={0xFFFFFFFF}
         >
           {/* Use multiple colliders for better hit detection - scale up for larger model */}
           <CapsuleCollider args={[7.5, 4]} position={[0, 7.5, 0]} sensor={false} />
@@ -738,10 +771,13 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
         { x: jackalopeSmoothedPos.current.x, y: jackalopeSmoothedPos.current.y, z: jackalopeSmoothedPos.current.z }
       );
 
-      // Smooth rotation
+      // Smooth rotation with angle wrapping (Bug 3 fix)
       const targetRot = jackalopeRotationRef.current + Math.PI;
       const rotSpeed = Math.min(delta * 20, 0.5);
-      jackalopeCurrentRotation.current = THREE.MathUtils.lerp(jackalopeCurrentRotation.current, targetRot, rotSpeed);
+      let jRotDiff = targetRot - jackalopeCurrentRotation.current;
+      while (jRotDiff > Math.PI) jRotDiff -= 2 * Math.PI;
+      while (jRotDiff < -Math.PI) jRotDiff += 2 * Math.PI;
+      jackalopeCurrentRotation.current += jRotDiff * rotSpeed;
       const quat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), jackalopeCurrentRotation.current);
       rigidBodyRef.current.setNextKinematicRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
     });
