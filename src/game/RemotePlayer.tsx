@@ -812,7 +812,7 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
       if (jackalopeModelGroupRef.current) {
         jackalopeModelGroupRef.current.position.set(
           jackalopeSmoothedPos.current.x,
-          jackalopeSmoothedPos.current.y - 0.65,
+          jackalopeSmoothedPos.current.y - 2.15,
           jackalopeSmoothedPos.current.z
         );
         jackalopeModelGroupRef.current.rotation.set(0, jackalopeCurrentRotation.current, 0);
@@ -1200,7 +1200,7 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
           <group
             ref={jackalopeModelGroupRef}
             scale={[2, 2, 2]}
-            position={position ? [position.x, position.y - 0.65, position.z] : [0, -0.65, 0]}
+            position={position ? [position.x, position.y - 2.15, position.z] : [0, -2.15, 0]}
             rotation={[0, (rotation || 0) + Math.PI, 0]}
           >
             <JackalopeModel
@@ -1308,7 +1308,7 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
           />
         ) : (
           <JackalopeModel 
-            position={[0, -2.72, 0]} 
+            position={[0, -2.15, 0]} 
             rotation={[0, 0, 0]} 
             scale={[2, 2, 2]}
           />

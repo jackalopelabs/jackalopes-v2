@@ -52,6 +52,13 @@ export const JackalopeModel = ({
               }
             });
             
+            // Auto-ground: measure bounding box and shift model so feet touch Y=0
+            const box = new THREE.Box3().setFromObject(gltf.scene);
+            console.log(`🐰 JackalopeModel bounds: min.y=${box.min.y.toFixed(3)}, max.y=${box.max.y.toFixed(3)}, height=${(box.max.y - box.min.y).toFixed(3)}`);
+            // Shift the scene so the bottom of the model sits at local Y=0
+            gltf.scene.position.y -= box.min.y;
+            console.log(`🐰 JackalopeModel auto-grounded: shifted Y by ${(-box.min.y).toFixed(3)}`);
+
             // Add the loaded model to our group
             group.current.add(gltf.scene);
             

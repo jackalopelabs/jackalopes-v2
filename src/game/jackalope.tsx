@@ -191,7 +191,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
                 // Force the model to be at the correct position
                 jackalopeModelRef.current.position.set(
                     position.current.x,
-                    position.current.y - 0.65,
+                    position.current.y - 2.15,
                     position.current.z
                 );
                 
@@ -593,7 +593,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
                 console.log(`[JACKALOPE] Model position out of bounds (y=${modelY.toFixed(2)}), resetting position`);
                 position.current.y = 3.0;
                 velocity.current.set(0, 0, 0);
-                jackalopeModelRef.current.position.y = position.current.y - 0.65;
+                jackalopeModelRef.current.position.y = position.current.y - 2.15;
                 rigidBody.setNextKinematicTranslation(position.current);
             }
         }
@@ -612,7 +612,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
             // Update model position directly
             jackalopeModelRef.current.position.set(
                 position.current.x,
-                position.current.y - 0.65, // Reduce height offset to lower the model
+                position.current.y - 2.15, // Reduce height offset to lower the model
                 position.current.z
             )
             
@@ -846,7 +846,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
                 <group 
                     ref={jackalopeModelRef} 
                     scale={[2, 2, 2]}
-                    position={[position.current.x, position.current.y - 0.65, position.current.z]}
+                    position={[position.current.x, position.current.y - 2.15, position.current.z]}
                     rotation={[0, rotation.current + Math.PI, 0]}
                 >
                     <JackalopeModel
