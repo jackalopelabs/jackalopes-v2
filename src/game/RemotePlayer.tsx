@@ -179,6 +179,14 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
   
   // Add reference for smooth rotation
   const currentRotation = useRef<number>(rotation || 0);
+
+  // Mirror latest props into refs so useFrame always reads fresh values (avoids stale closure lag)
+  const latestPositionRef = useRef<typeof position>(position);
+  const latestRotationRef = useRef<number>(rotation || 0);
+  const latestCameraPitchRef = useRef<number>(cameraPitch);
+  latestPositionRef.current = position;
+  latestRotationRef.current = rotation || 0;
+  latestCameraPitchRef.current = cameraPitch;
   
   const MIN_ANIMATION_CHANGE_INTERVAL = 200; // ms
   
@@ -359,6 +367,9 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     
     if (!meshRef.current) return;
     
+    const position = latestPositionRef.current;
+    const rotation = latestRotationRef.current;
+
     // Safely update position with error checking
     if (position && typeof position.x === 'number' && 
         typeof position.y === 'number' && 
@@ -485,59 +496,54 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     if (playerType === 'merc' && flashlightOn) {
       // Ensure refs are available in the next frame
       requestAnimationFrame(() => {
-        if (spotlightRef.current && spotlightTargetRef.current) {
-          // Initialize the spotlight target
-          const normalizedRotation = ((rotation || 0) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+        const pos = latestPositionRef.current;
+        const rot = latestRotationRef.current;
+        if (spotlightRef.current && spotlightTargetRef.current && pos) {
+          const normalizedRotation = (rot % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
           const dirX = Math.sin(normalizedRotation);
           const dirZ = Math.cos(normalizedRotation);
-          
-          // Position the target for initial setup
           spotlightTargetRef.current.position.set(
-            position.x + dirX * 30, 
-            position.y - 2, 
-            position.z + dirZ * 30
+            pos.x + dirX * 30,
+            pos.y - 2,
+            pos.z + dirZ * 30
           );
           spotlightTargetRef.current.updateMatrixWorld();
-          
-          // Ensure the spotlight is pointing at the target
           spotlightRef.current.target = spotlightTargetRef.current;
-          
-          console.log(`🔦 Flashlight initialized for ${playerId} at rotation ${normalizedRotation.toFixed(2)}`);
         }
       });
     }
-  }, [playerType, flashlightOn, playerId, position, rotation]);
+  }, [playerType, flashlightOn, playerId]);
 
   // Update remote flashlight position in world space each frame
   useFrame(() => {
     if (playerType === 'merc' && flashlightOn && 
         spotlightRef.current && spotlightTargetRef.current) {
+
+      const pos = latestPositionRef.current;
+      const yaw = latestRotationRef.current;
+      const pitch = latestCameraPitchRef.current;
+
+      if (!pos) return;
       
-      const yaw = rotation || 0;
       const dirX = Math.sin(yaw);
       const dirZ = Math.cos(yaw);
       
       // Position light at player's chest/gun height (world space)
-      const lightHeight = position.y + 6;
+      const lightHeight = pos.y + 6;
       spotlightRef.current.position.set(
-        position.x + dirX * 1,
+        pos.x + dirX * 1,
         lightHeight,
-        position.z + dirZ * 1
+        pos.z + dirZ * 1
       );
       
       // Use cameraPitch for vertical aiming
       // pitch > 0 = looking down, pitch < 0 = looking up
-      const pitch = cameraPitch ?? 0;
       const targetDist = 20;
       const verticalOffset = -Math.sin(pitch) * targetDist;
-      // Debug pitch every 2 seconds
-      if (Math.random() < 0.03) {
-        console.log(`🔦 Remote flashlight pitch=${pitch.toFixed(2)}, vertOffset=${verticalOffset.toFixed(1)}`);
-      }
       spotlightTargetRef.current.position.set(
-        position.x + dirX * targetDist,
+        pos.x + dirX * targetDist,
         lightHeight + verticalOffset,
-        position.z + dirZ * targetDist
+        pos.z + dirZ * targetDist
       );
       spotlightTargetRef.current.updateMatrixWorld();
       spotlightRef.current.target = spotlightTargetRef.current;
@@ -662,24 +668,31 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     const attachedProjectilesRef = useRef<{id: string, position: THREE.Vector3}[]>([]);
     const rigidBodyRef = useRef<any>(null);
     
-    // Smooth position interpolation ref for jackalope
+    // Refs to latest prop values — always fresh in useFrame (avoids stale closure lag)
+    const jackalopePositionRef = useRef<{ x: number; y: number; z: number } | null>(null);
+    const jackalopeRotationRef = useRef<number>(rotation || 0);
     const jackalopeSmoothedPos = useRef(new THREE.Vector3(position?.x || 0, position?.y || 0, position?.z || 0));
     const jackalopeCurrentRotation = useRef(rotation || 0);
+
+    // Mirror incoming props into refs immediately (runs before useFrame)
+    jackalopePositionRef.current = position && typeof position.x === 'number' ? position : jackalopePositionRef.current;
+    jackalopeRotationRef.current = rotation ?? jackalopeRotationRef.current;
 
     // Interpolate position & rotation for remote jackalope every frame
     useFrame((_, delta) => {
       if (!rigidBodyRef.current) return;
-      if (!position || typeof position.x !== 'number') return;
+      const latestPos = jackalopePositionRef.current;
+      if (!latestPos) return;
 
-      const targetPos = new THREE.Vector3(position.x, position.y + 0.3, position.z);
+      const targetPos = new THREE.Vector3(latestPos.x, latestPos.y + 0.3, latestPos.z);
       const dist = jackalopeSmoothedPos.current.distanceTo(targetPos);
 
-      // Adaptive lerp speed based on distance
+      // Aggressive lerp — prioritise low latency over buttery smoothness
       let speed: number;
-      if (dist > 5) speed = 1.0;           // Snap
-      else if (dist > 2) speed = Math.min(1, delta * 15);
-      else if (dist > 0.5) speed = Math.min(1, delta * 10);
-      else speed = Math.min(1, delta * 8);
+      if (dist > 5) speed = 1.0;                           // Snap
+      else if (dist > 2) speed = Math.min(1, delta * 20);
+      else if (dist > 0.1) speed = Math.min(1, delta * 15);
+      else speed = Math.min(1, delta * 12);
 
       jackalopeSmoothedPos.current.lerp(targetPos, speed);
       rigidBodyRef.current.setNextKinematicTranslation(
@@ -687,8 +700,8 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
       );
 
       // Smooth rotation
-      const targetRot = (rotation || 0) + Math.PI;
-      const rotSpeed = Math.min(delta * 15, 0.5);
+      const targetRot = jackalopeRotationRef.current + Math.PI;
+      const rotSpeed = Math.min(delta * 20, 0.5);
       jackalopeCurrentRotation.current = THREE.MathUtils.lerp(jackalopeCurrentRotation.current, targetRot, rotSpeed);
       const quat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), jackalopeCurrentRotation.current);
       rigidBodyRef.current.setNextKinematicRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
