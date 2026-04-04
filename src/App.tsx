@@ -36,6 +36,11 @@ import { ModelLoader } from './components/ModelLoader';
 import { ModelChecker } from './components/ModelChecker';
 import ScoreDisplay from './components/ScoreDisplay'; // Import the new ScoreDisplay component
 import { IntroScreenManager } from './components/IntroScreen';
+import { GameOverScreen } from './components/GameOverScreen';
+import { Crosshair as GameCrosshair } from './components/Crosshair';
+import { KillFeed, emitKillFeed } from './components/KillFeed';
+import { GameHUD } from './components/GameHUD';
+import { ScreenShake, triggerScreenShake } from './components/ScreenShake';
 
 // Add TypeScript declaration for window.__setGraphicsQuality
 declare global {
@@ -1252,6 +1257,48 @@ export function App() {
     // Add score state
     const [jackalopesScore, setJackalopesScore] = useState(0);
     const [mercsScore, setMercsScore] = useState(0);
+
+    // Game round state
+    const [gameOver, setGameOver] = useState(false);
+    const [hitMarker, setHitMarker] = useState(false);
+    const hitMarkerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Hit marker helper
+    const showHitMarker = useCallback(() => {
+        setHitMarker(true);
+        if (hitMarkerTimer.current) clearTimeout(hitMarkerTimer.current);
+        hitMarkerTimer.current = setTimeout(() => setHitMarker(false), 200);
+        triggerScreenShake(0.15);
+    }, []);
+
+    // Round end handler
+    const handleRoundEnd = useCallback(() => {
+        setGameOver(true);
+    }, []);
+
+    // Play again handler
+    const handlePlayAgain = useCallback(() => {
+        setGameOver(false);
+        setJackalopesScore(0);
+        setMercsScore(0);
+        localStorage.setItem('jackalopes_score', '0');
+        localStorage.setItem('mercs_score', '0');
+
+        // Broadcast reset
+        if (enableMultiplayer && connectionManager?.isReadyToSend()) {
+            connectionManager.sendMessage({
+                type: 'game_event',
+                event: {
+                    event_type: 'game_score_update',
+                    source: 'round_reset',
+                    jackalopesScore: 0,
+                    mercsScore: 0,
+                    timestamp: Date.now(),
+                    shotId: `reset-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
+                }
+            });
+        }
+    }, [enableMultiplayer, connectionManager]);
 
     // Host tracking for score and timer synchronization
     const [isHost, setIsHost] = useState(false);
@@ -2783,6 +2830,7 @@ export function App() {
           // Update last score time to prevent timer resets from overriding
           lastScoreTime.current = Date.now();
           console.log('🐰 Jackalope scored a point! New score:', newScore);
+          emitKillFeed('score', '🐰 Jackalope reached the void!', '#4682B4');
 
           // Store the updated score in localStorage
           try {
@@ -2862,6 +2910,8 @@ export function App() {
           // Update last score time to prevent timer resets from overriding
           lastScoreTime.current = Date.now();
           console.log(`🎯 Merc scored a point! Current score: ${mercsScore}, updating to: ${newScore}`);
+          emitKillFeed('kill', '🎯 Merc took down a Jackalope!', '#ff4500');
+          showHitMarker();
 
           // Store the updated score in localStorage
           try {
@@ -3781,6 +3831,9 @@ export function App() {
                     <MultiplayerSyncManager connectionManager={connectionManager} />
                 )}
 
+                {/* Screen shake effect */}
+                <ScreenShake intensity={0.3} decay={8} />
+
                 <Physics
                     debug={false}
                     paused={loading}
@@ -4012,8 +4065,7 @@ export function App() {
                 <ModelPreloader />
             </Canvas>
 
-            {/* Only show crosshair in first-person view */}
-            {(enableMultiplayer ? !playerCharacterInfo.thirdPerson : !thirdPersonView) && <Crosshair />}
+            {/* Old crosshair replaced by GameCrosshair in HUD section above */}
 
             {/* Stats Display - must be outside Canvas */}
             <StatsDisplay />
@@ -4179,61 +4231,25 @@ export function App() {
                 </div>
             )}
 
-            {/* Replace HealthBar with ScoreDisplay */}
-            <ScoreDisplay
+            {/* Game HUD - top center scoreboard */}
+            <GameHUD
                 jackalopesScore={jackalopesScore}
                 mercsScore={mercsScore}
+                playerType={playerCharacterInfo.type}
                 isHost={isHost}
                 matchStartTime={matchTimerData?.matchStartTime}
                 matchDuration={matchTimerData?.matchDuration}
                 serverTime={matchTimerData?.serverTime}
-                onReset={() => {
-                    // Only reset scores if no scoring events in the last 3 seconds
-                    // This prevents the timer from resetting scores that were just updated
-                    const timeSinceLastScore = Date.now() - lastScoreTime.current;
-                    if (timeSinceLastScore > 3000 || (jackalopesScore === 0 && mercsScore === 0)) {
-                        // Reset scores to 0-0 when timer reaches zero
-                        setJackalopesScore(0);
-                        setMercsScore(0);
-
-                        // Also update localStorage
-                        localStorage.setItem('jackalopes_score', '0');
-                        localStorage.setItem('mercs_score', '0');
-                        localStorage.setItem('scores_reset_time', Date.now().toString());
-
-                        // Also notify other clients if multiplayer is enabled
-                        if (enableMultiplayer && connectionManager && connectionManager.isReadyToSend()) {
-                            connectionManager.sendMessage({
-                                type: 'game_event',
-                                event: {
-                                    event_type: 'game_score_update',
-                                    source: 'timer_reset',
-                                    jackalopesScore: 0,
-                                    mercsScore: 0,
-                                    reset_time: Date.now(),
-                                    timestamp: Date.now(),
-                                    shotId: `reset-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
-                                }
-                            });
-
-                            // Also broadcast via window event for cross-tab communication
-                            window.dispatchEvent(new CustomEvent('game_score_update', {
-                                detail: {
-                                    source: 'timer_reset',
-                                    jackalopesScore: 0,
-                                    mercsScore: 0,
-                                    reset_time: Date.now(),
-                                    shotId: `reset-window-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
-                                }
-                            }));
-                        }
-
-                        console.log('🕒 Timer reached zero - scores reset to 0-0');
-                    } else {
-                        console.log(`🕒 Timer reached zero but score was updated ${timeSinceLastScore}ms ago - not resetting`);
-                    }
-                }}
+                onTimerEnd={handleRoundEnd}
             />
+
+            {/* Crosshair for mercs */}
+            {playerCharacterInfo.type === 'merc' && !gameOver && (
+                <GameCrosshair hitMarker={hitMarker} size={28} />
+            )}
+
+            {/* Kill feed */}
+            <KillFeed />
 
             {/* Add AudioToggleButton for easy audio control - custom positioning when virtual gamepad is shown */}
             {showVirtualGamepad ? (
@@ -4309,60 +4325,13 @@ export function App() {
                 playerType={playerCharacterInfo.type}
             />
 
-            {/* After score display */}
-            <ScoreDisplay
+            {/* Game Over screen */}
+            <GameOverScreen
+                visible={gameOver}
                 jackalopesScore={jackalopesScore}
                 mercsScore={mercsScore}
-                isHost={isHost}
-                matchStartTime={matchTimerData?.matchStartTime}
-                matchDuration={matchTimerData?.matchDuration}
-                serverTime={matchTimerData?.serverTime}
-                onReset={() => {
-                    // Only reset scores if no scoring events in the last 3 seconds
-                    // This prevents the timer from resetting scores that were just updated
-                    const timeSinceLastScore = Date.now() - lastScoreTime.current;
-                    if (timeSinceLastScore > 3000 || (jackalopesScore === 0 && mercsScore === 0)) {
-                        // Reset scores to 0-0 when timer reaches zero
-                        setJackalopesScore(0);
-                        setMercsScore(0);
-
-                        // Also update localStorage
-                        localStorage.setItem('jackalopes_score', '0');
-                        localStorage.setItem('mercs_score', '0');
-                        localStorage.setItem('scores_reset_time', Date.now().toString());
-
-                        // Also notify other clients if multiplayer is enabled
-                        if (enableMultiplayer && connectionManager && connectionManager.isReadyToSend()) {
-                            connectionManager.sendMessage({
-                                type: 'game_event',
-                                event: {
-                                    event_type: 'game_score_update',
-                                    source: 'timer_reset',
-                                    jackalopesScore: 0,
-                                    mercsScore: 0,
-                                    reset_time: Date.now(),
-                                    timestamp: Date.now(),
-                                    shotId: `reset-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
-                                }
-                            });
-
-                            // Also broadcast via window event for cross-tab communication
-                            window.dispatchEvent(new CustomEvent('game_score_update', {
-                                detail: {
-                                    source: 'timer_reset',
-                                    jackalopesScore: 0,
-                                    mercsScore: 0,
-                                    reset_time: Date.now(),
-                                    shotId: `reset-window-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
-                                }
-                            }));
-                        }
-
-                        console.log('🕒 Timer reached zero - scores reset to 0-0');
-                    } else {
-                        console.log(`🕒 Timer reached zero but score was updated ${timeSinceLastScore}ms ago - not resetting`);
-                    }
-                }}
+                playerType={playerCharacterInfo.type}
+                onPlayAgain={handlePlayAgain}
             />
         </>
     );
