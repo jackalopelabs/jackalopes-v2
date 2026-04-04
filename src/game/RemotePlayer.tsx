@@ -170,6 +170,8 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
   const spotlightRef = useRef<THREE.SpotLight>(null);
   const spotlightTargetRef = useRef<THREE.Object3D>(null);
   const flashlightGroupRef = useRef<THREE.Group>(null);
+  const flashlightGlowRef = useRef<THREE.Mesh>(null); // Visible glow source for the flashlight
+  const flashlightPointLightRef = useRef<THREE.PointLight>(null); // Point light for fog penetration
   const lastAnimationChangeTime = useRef<number>(Date.now());
   const pendingAnimationChange = useRef<string | null>(null);
   const lastPosition = useRef<THREE.Vector3 | null>(null);
@@ -616,6 +618,17 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     // Control flashlight intensity based on state (since we can't conditionally render due to React.memo)
     spotlightRef.current.intensity = isFlashlightOn ? 40 : 0;
 
+    // Control glow visibility - scale to 0 when off, normal when on
+    if (flashlightGlowRef.current) {
+      const glowScale = isFlashlightOn ? 1 : 0;
+      flashlightGlowRef.current.scale.setScalar(glowScale);
+    }
+
+    // Control point light intensity for fog visibility
+    if (flashlightPointLightRef.current) {
+      flashlightPointLightRef.current.intensity = isFlashlightOn ? 8 : 0;
+    }
+
     // Only update position if flashlight is on
     if (!isFlashlightOn) return;
 
@@ -630,11 +643,18 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
 
     // Position light at player's chest/gun height (world space)
     const lightHeight = pos.y + 6;
-    spotlightRef.current.position.set(
-      pos.x + dirX * 1,
-      lightHeight,
-      pos.z + dirZ * 1
-    );
+    const glowX = pos.x + dirX * 1;
+    const glowZ = pos.z + dirZ * 1;
+
+    spotlightRef.current.position.set(glowX, lightHeight, glowZ);
+
+    // Position the visible glow source and point light at the same location as the spotlight
+    if (flashlightGlowRef.current) {
+      flashlightGlowRef.current.position.set(glowX, lightHeight, glowZ);
+    }
+    if (flashlightPointLightRef.current) {
+      flashlightPointLightRef.current.position.set(glowX, lightHeight, glowZ);
+    }
 
     // Use cameraPitch for vertical aiming
     // pitch > 0 = looking down, pitch < 0 = looking up
@@ -734,6 +754,23 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
           />
           <object3D ref={spotlightTargetRef} />
         </group>
+        {/* Visible flashlight glow source - jackalopes can see this from a distance in the fog */}
+        <mesh ref={flashlightGlowRef} scale={0}>
+          <sphereGeometry args={[0.3, 16, 16]} />
+          <meshBasicMaterial
+            color={0xffffcc}
+            transparent
+            opacity={0.9}
+          />
+        </mesh>
+        {/* Add a point light at the glow position for extra visibility through fog */}
+        <pointLight
+          ref={flashlightPointLightRef}
+          color={0xffffaa}
+          intensity={0}
+          distance={20}
+          decay={1.5}
+        />
         {/* Player ID tag - positioned higher for the taller merc model */}
         <Html position={[position?.x || 0, (position?.y || 0) + 12, position?.z || 0]} center>
           {/* Only show nametag if this player is on the same team as the local player */}
