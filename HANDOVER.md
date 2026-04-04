@@ -81,6 +81,28 @@ Test by opening two tabs:
 - `http://147.182.235.54:5173/?role=merc`
 - `http://147.182.235.54:5173/?role=jackalope`
 
+## ⚠️ CRITICAL LESSON: Memoized Components + Render-Time Side Effects (2026-04-04)
+
+**This bug cost us 6+ hours across two sessions. READ THIS.**
+
+`RemotePlayer` is wrapped in `React.memo` with a comparator that only checks `playerId`.
+This means the component **re-renders exactly once** after mount — when a new player joins.
+
+The live store sync (`window.__livePlayerData[playerId]`) was written at the top of the
+component body (render scope), NOT inside `useFrame`. So it ran once, set the position
+refs, and then `useFrame` kept reading those same stale refs forever. The remote player
+appeared stuck at its spawn point while the actual player walked around.
+
+**The fix:** Read from `window.__livePlayerData` INSIDE `useFrame`, not at render time.
+
+**The rule:** In any memoized R3F component, NEVER rely on render-time side effects to
+sync external data. If data changes outside React (like a window global updated 60x/sec),
+read it inside `useFrame`. Render functions in memoized components are basically `constructor`.
+
+**How to spot it:** Remote player renders but doesn't move. Position data IS flowing
+(check `window.__livePlayerData` in console — it updates). The component just never
+re-reads it because memo blocks re-renders.
+
 ## Approach
 1. Read RemotePlayer.tsx IN FULL before making any changes
 2. Read the merc branch and jackalope branch side by side — understand the difference
