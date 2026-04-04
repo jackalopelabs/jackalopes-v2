@@ -1162,9 +1162,9 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
               {/* Extra collider to catch projectiles */}
               <BallCollider args={[2.4]} position={[0, 1.6, 0]} sensor={false} friction={1} restitution={0.1} />
               
-              {/* Use primitive for the model — offset must match local jackalope (-0.65) */}
+              {/* Use primitive for the model — offset to ground model feet at physics Y */}
               <JackalopeModel 
-                position={[0, -0.65, 0]} 
+                position={[0, -1.0, 0]} 
                 rotation={[0, 0, 0]} 
                 scale={[2, 2, 2]}
               />
