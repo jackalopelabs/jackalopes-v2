@@ -180,13 +180,33 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
   // Add reference for smooth rotation
   const currentRotation = useRef<number>(rotation || 0);
 
-  // Mirror latest props into refs so useFrame always reads fresh values (avoids stale closure lag)
+  // Read live data directly from the shared ref store (bypasses React re-renders)
+  // Falls back to props if store isn't available yet
   const latestPositionRef = useRef<typeof position>(position);
   const latestRotationRef = useRef<number>(rotation || 0);
   const latestCameraPitchRef = useRef<number>(cameraPitch);
-  latestPositionRef.current = position;
-  latestRotationRef.current = rotation || 0;
-  latestCameraPitchRef.current = cameraPitch;
+  const latestIsMovingRef = useRef<boolean>(isMoving || false);
+  const latestIsRunningRef = useRef<boolean>(isRunning || false);
+  const latestFlashlightRef = useRef<boolean>(flashlightOn || false);
+
+  // Sync from live store every render (synchronous, before useFrame)
+  const liveStore = (window as any).__livePlayerData;
+  const live = liveStore?.[playerId];
+  if (live) {
+    latestPositionRef.current = live.position;
+    latestRotationRef.current = live.rotation;
+    latestCameraPitchRef.current = live.cameraPitch;
+    latestIsMovingRef.current = live.isMoving;
+    latestIsRunningRef.current = live.isRunning;
+    latestFlashlightRef.current = live.flashlightOn;
+  } else {
+    latestPositionRef.current = position;
+    latestRotationRef.current = rotation || 0;
+    latestCameraPitchRef.current = cameraPitch;
+    latestIsMovingRef.current = isMoving || false;
+    latestIsRunningRef.current = isRunning || false;
+    latestFlashlightRef.current = flashlightOn || false;
+  }
   
   const MIN_ANIMATION_CHANGE_INTERVAL = 200; // ms
   
@@ -234,16 +254,29 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     }
   }, [isMoving, isRunning, isShooting, localIsMoving, localIsRunning, playerId]);
   
-  // Force re-check movement state when props change
-  useEffect(() => {
-    // Debug the incoming props more clearly
-    if (isDebugEnabled(DEBUG_LEVELS.VERBOSE)) {
-      log.player(`RemotePlayer ${playerId} movement props received: ${JSON.stringify({
-        isMoving: isMoving === true ? "TRUE" : (isMoving === false ? "FALSE" : "undefined"),
-        isRunning: isRunning === true ? "TRUE" : (isRunning === false ? "FALSE" : "undefined"),
-      })}`);
+  // Sync movement state from live store (bypasses React props entirely)
+  // Polls at ~15hz via useFrame to avoid re-render storms
+  const lastMovementSyncTime = useRef(0);
+  useFrame(() => {
+    const now = Date.now();
+    if (now - lastMovementSyncTime.current < 66) return; // ~15hz
+    lastMovementSyncTime.current = now;
+
+    const liveMoving = latestIsMovingRef.current;
+    const liveRunning = latestIsRunningRef.current;
+
+    if (liveMoving !== localIsMoving || liveRunning !== localIsRunning) {
+      const timeSinceLastChange = now - lastAnimationChangeTime.current;
+      if (timeSinceLastChange >= 300) {
+        setLocalIsMoving(liveMoving);
+        setLocalIsRunning(liveRunning);
+        lastAnimationChangeTime.current = now;
+      }
     }
-    
+  });
+
+  // Force re-check movement state when props change (fallback)
+  useEffect(() => {
     // Add hysteresis to prevent rapid toggling between states
     const now = Date.now();
     const timeSinceLastChange = now - lastAnimationChangeTime.current;
@@ -674,9 +707,15 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     const jackalopeSmoothedPos = useRef(new THREE.Vector3(position?.x || 0, position?.y || 0, position?.z || 0));
     const jackalopeCurrentRotation = useRef(rotation || 0);
 
-    // Mirror incoming props into refs immediately (runs before useFrame)
-    jackalopePositionRef.current = position && typeof position.x === 'number' ? position : jackalopePositionRef.current;
-    jackalopeRotationRef.current = rotation ?? jackalopeRotationRef.current;
+    // Mirror from live store (bypasses React props) or fall back to props
+    const jackalopeLive = (window as any).__livePlayerData?.[playerId];
+    if (jackalopeLive) {
+      jackalopePositionRef.current = jackalopeLive.position;
+      jackalopeRotationRef.current = jackalopeLive.rotation;
+    } else {
+      jackalopePositionRef.current = position && typeof position.x === 'number' ? position : jackalopePositionRef.current;
+      jackalopeRotationRef.current = rotation ?? jackalopeRotationRef.current;
+    }
 
     // Interpolate position & rotation for remote jackalope every frame
     useFrame((_, delta) => {

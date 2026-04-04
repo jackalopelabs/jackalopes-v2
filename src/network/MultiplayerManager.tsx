@@ -1502,7 +1502,26 @@ export const MultiplayerManager: React.FC<{
   const [isConnected, setIsConnected] = useState(false);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [remotePlayers, setRemotePlayers] = useState<Record<string, RemotePlayerData>>({});
-  
+
+  // Live position store — updated directly from network, NO React re-renders
+  // RemotePlayer reads this via window.__livePlayerData
+  const livePlayerData = useRef<Record<string, {
+    position: { x: number; y: number; z: number };
+    rotation: number;
+    cameraPitch: number;
+    flashlightOn: boolean;
+    isMoving: boolean;
+    isRunning: boolean;
+    isShooting: boolean;
+    lastUpdate: number;
+  }>>({});
+
+  // Expose on window so RemotePlayer can read it without prop drilling
+  useEffect(() => {
+    (window as any).__livePlayerData = livePlayerData.current;
+    return () => { delete (window as any).__livePlayerData; };
+  }, []);
+
   // For rate limiting player updates
   const playerUpdateThrottleRef = useRef<Record<string, { lastTime: number, minInterval: number }>>({});
   
@@ -1681,6 +1700,8 @@ export const MultiplayerManager: React.FC<{
         delete newPlayers[data.id];
         return newPlayers;
       });
+      // Also clean up live data
+      delete livePlayerData.current[data.id];
     };
     
     const handlePlayerUpdate = (data: any) => {
@@ -1688,159 +1709,68 @@ export const MultiplayerManager: React.FC<{
       if (data.id === connectionManager.getPlayerId() || !data.id || data.id === 'undefined') {
         return;
       }
-      
-      // Log playerType from incoming data
-      if (DEBUG_LEVEL >= 2) {
-        console.log(`🧩 Player update for ${data.id} with playerType: ${data.playerType || 'undefined'}, state.playerType: ${data.state?.playerType || 'undefined'}`);
-      }
-      
-      // Debug logging every 60 updates
-      if (Math.random() < 0.02 && DEBUG_LEVEL >= 2) {
-        console.log(`📡 Remote player update for ${data.id}:`, data);
-      }
-      
-      // Apply rate limiting for updates - skip some to avoid overwhelming the component
+
       const now = Date.now();
-      
+
+      // Convert position and rotation once
+      const position = data.position
+        ? arrayToObjectPosition(data.position)
+        : livePlayerData.current[data.id]?.position || { x: 0, y: 0, z: 0 };
+      const rotation = data.rotation
+        ? quaternionToAngle(data.rotation)
+        : livePlayerData.current[data.id]?.rotation ?? 0;
+      const flashlightOn = data.state?.flashlightOn ?? livePlayerData.current[data.id]?.flashlightOn ?? false;
+      const cameraPitch = data.state?.cameraPitch ?? livePlayerData.current[data.id]?.cameraPitch ?? 0;
+
+      // Detect movement from position delta
+      const prevLive = livePlayerData.current[data.id];
+      let isMoving = false;
+      let isRunning = false;
+      if (position && prevLive?.position) {
+        const dx = position.x - prevLive.position.x;
+        const dy = position.y - prevLive.position.y;
+        const dz = position.z - prevLive.position.z;
+        const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        const timeDelta = Math.min((now - (prevLive.lastUpdate || now)) / 1000, 1);
+        const speed = timeDelta > 0 ? distance / timeDelta : 0;
+        if (distance >= 0.02) {
+          isMoving = true;
+          isRunning = speed > 8.0;
+        }
+      }
+
+      // *** HOT PATH: write directly to ref store — NO React re-render ***
+      livePlayerData.current[data.id] = {
+        position,
+        rotation,
+        cameraPitch,
+        flashlightOn,
+        isMoving,
+        isRunning,
+        isShooting: data.state?.isShooting ?? prevLive?.isShooting ?? false,
+        lastUpdate: now,
+      };
+
+      // *** COLD PATH: only trigger React for structural changes (new player) ***
       setRemotePlayers(prev => {
-        // If player doesn't exist yet, create them
-        if (!prev[data.id]) {
-          console.log(`Adding player ${data.id} from update - wasn't in our list`);
-          
-          // For new players, get the playerType from the data
-          const newPlayerType = data.playerType || data.state?.playerType || 'merc';
-          
-          // Convert position and rotation
-          const position = data.position 
-            ? arrayToObjectPosition(data.position) 
-            : newPlayerType === 'merc' ? { x: 10, y: 7, z: 10 } : { x: -100, y: 7, z: 10 };
-            
-          const rotation = data.rotation 
-            ? quaternionToAngle(data.rotation) 
-            : 0;
-          
-          console.log(`Creating new remote player with type: ${newPlayerType}`);
-          
-          return {
-            ...prev,
-            [data.id]: {
-              playerId: data.id,
-              position,
-              rotation,
-              lastUpdate: now,
-              playerType: newPlayerType,
-              isMoving: false,
-              isRunning: false,
-              isShooting: false,
-              flashlightOn: data.state?.flashlightOn || false // Track flashlight state
-            }
-          };
-        }
-        
-        // For existing players, ALWAYS use their existing playerType
-        // This prevents flashing between character types
-        const existingPlayer = prev[data.id];
-        const existingPlayerType = existingPlayer.playerType;
-        
-        // Log if there's an attempt to change player type
-        if ((data.playerType || data.state?.playerType) && 
-            data.playerType !== existingPlayerType && 
-            data.state?.playerType !== existingPlayerType) {
-          console.log(`⚠️ Ignoring player type change for ${data.id}: Network wants to change from ${existingPlayerType} to ${data.playerType || data.state?.playerType}`);
-        }
-        
-        // Convert position and rotation
-        const position = data.position 
-          ? arrayToObjectPosition(data.position) 
-          : existingPlayer.position;
-          
-        const rotation = data.rotation 
-          ? quaternionToAngle(data.rotation) 
-          : existingPlayer.rotation;
-        
-        // Get flashlight state from update
-        const flashlightOn = data.state?.flashlightOn !== undefined ? 
-          data.state.flashlightOn : existingPlayer.flashlightOn;
-        
-        // Detect movement by calculating position change
-        let isMoving = false;
-        let isRunning = false;
-        let timeDelta = 0.016; // Default to 60fps (~16ms)
-        let speed = 0;
-        
-        // Calculate movement only if we have position data
-        if (data.position && existingPlayer.position) {
-          const prevPos = existingPlayer.position;
-          const distance = Math.sqrt(
-            Math.pow(position.x - prevPos.x, 2) + 
-            Math.pow(position.y - prevPos.y, 2) + 
-            Math.pow(position.z - prevPos.z, 2)
-          );
-          
-          // Get the current moving state
-          const wasMoving = existingPlayer.isMoving || false;
-          const wasRunning = existingPlayer.isRunning || false;
-          
-          // Calculate speed if we have a previous update time
-          if (existingPlayer.lastUpdate) {
-            // Calculate time delta in seconds (max 1s to avoid giant jumps)
-            timeDelta = Math.min((now - existingPlayer.lastUpdate) / 1000, 1);
-            if (timeDelta > 0) {
-              speed = distance / timeDelta;
-            }
-          }
-          
-          // Apply hysteresis - use different thresholds for starting vs stopping movement
-          // IMPORTANT: Completely stopped detection
-          if (distance < 0.02) {
-            // Very little movement - considered stopped
-            isMoving = false;
-            isRunning = false;
-          }
-          // Significant movement - determine if walking or running
-          else if (distance > 0.05 || wasMoving) {
-            isMoving = true;
-            
-            // Determine running state based on speed with clearer threshold
-            // Running when speed > 8.0 units/second
-            if (speed > 8.0) {
-              isRunning = true;
-            } 
-            // Walking when speed is between 0.2 and 8.0
-            else if (speed > 0.2 && speed <= 8.0) {
-              isRunning = false;
-            }
-            // For other cases, maintain previous running state with consistency checks
-            else {
-              isRunning = wasRunning;
-              
-              // But ensure we never have isRunning=true when speed is very low
-              if (isRunning && speed < 0.2) {
-                isRunning = false;
-              }
-            }
-          }
-          
-          // Log movement state changes with clear indicators
-          if ((existingPlayer.isMoving !== isMoving || existingPlayer.isRunning !== isRunning) && Math.random() < 0.3) {
-            console.log(`💨 Player ${data.id} movement: ${isMoving ? (isRunning ? '🏃 RUNNING' : '🚶 WALKING') : '🧍 STOPPED'} (dist: ${distance.toFixed(3)}, speed: ${speed.toFixed(2)})`);
-          }
-        }
-        
-        // Update existing player but NEVER change the playerType
+        if (prev[data.id]) return prev; // Already known — skip re-render
+
+        console.log(`Adding player ${data.id} from update - wasn't in our list`);
+        const newPlayerType = data.playerType || data.state?.playerType || 'merc';
+        console.log(`🧩 New player ${data.id} assigned type: ${newPlayerType}`);
+
         return {
           ...prev,
           [data.id]: {
-            ...existingPlayer,
+            playerId: data.id,
             position,
             rotation,
             lastUpdate: now,
-            isMoving,
-            isRunning,
-            // Explicitly preserve the existing player type
-            playerType: existingPlayerType,
+            playerType: newPlayerType,
+            isMoving: false,
+            isRunning: false,
+            isShooting: false,
             flashlightOn,
-            cameraPitch: data.state?.cameraPitch ?? existingPlayer.cameraPitch ?? 0
           }
         };
       });
