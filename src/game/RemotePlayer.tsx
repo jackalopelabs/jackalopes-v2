@@ -258,14 +258,23 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
   
   // Sync movement state from live store (bypasses React props entirely)
   // Polls at ~15hz via useFrame to avoid re-render storms
+  // CRITICAL: Must read from __livePlayerData INSIDE useFrame because React.memo blocks re-renders
   const lastMovementSyncTime = useRef(0);
   useFrame(() => {
     const now = Date.now();
     if (now - lastMovementSyncTime.current < 66) return; // ~15hz
     lastMovementSyncTime.current = now;
 
-    const liveMoving = latestIsMovingRef.current;
-    const liveRunning = latestIsRunningRef.current;
+    // Read live store INSIDE useFrame (component is memoized, render-time sync only runs once)
+    const moveLive = (window as any).__livePlayerData?.[playerId];
+    const liveMoving = moveLive?.isMoving ?? false;
+    const liveRunning = moveLive?.isRunning ?? false;
+
+    // Also update the refs for other useFrame hooks that might need them
+    if (moveLive) {
+      latestIsMovingRef.current = liveMoving;
+      latestIsRunningRef.current = liveRunning;
+    }
 
     if (liveMoving !== localIsMoving || liveRunning !== localIsRunning) {
       const timeSinceLastChange = now - lastAnimationChangeTime.current;
@@ -589,47 +598,55 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
 
   // Update remote flashlight position in world space each frame
   useFrame(() => {
-    if (playerType === 'merc' && latestFlashlightRef.current && 
-        spotlightRef.current && spotlightTargetRef.current) {
-
-      // Read live store inside useFrame for fresh data
-      const fLive = (window as any).__livePlayerData?.[playerId];
-      if (fLive) {
-        latestPositionRef.current = fLive.position;
-        latestRotationRef.current = fLive.rotation;
-        latestCameraPitchRef.current = fLive.cameraPitch;
-        latestFlashlightRef.current = fLive.flashlightOn;
-      }
-
-      const pos = latestPositionRef.current;
-      const yaw = latestRotationRef.current;
-      const pitch = latestCameraPitchRef.current;
-
-      if (!pos) return;
-      
-      const dirX = Math.sin(yaw);
-      const dirZ = Math.cos(yaw);
-      
-      // Position light at player's chest/gun height (world space)
-      const lightHeight = pos.y + 6;
-      spotlightRef.current.position.set(
-        pos.x + dirX * 1,
-        lightHeight,
-        pos.z + dirZ * 1
-      );
-      
-      // Use cameraPitch for vertical aiming
-      // pitch > 0 = looking down, pitch < 0 = looking up
-      const targetDist = 20;
-      const verticalOffset = -Math.sin(pitch) * targetDist;
-      spotlightTargetRef.current.position.set(
-        pos.x + dirX * targetDist,
-        lightHeight + verticalOffset,
-        pos.z + dirZ * targetDist
-      );
-      spotlightTargetRef.current.updateMatrixWorld();
-      spotlightRef.current.target = spotlightTargetRef.current;
+    if (playerType !== 'merc' || !spotlightRef.current || !spotlightTargetRef.current) {
+      return;
     }
+
+    // Read live store inside useFrame for fresh data (component is memoized, props don't update)
+    const fLive = (window as any).__livePlayerData?.[playerId];
+    if (fLive) {
+      latestPositionRef.current = fLive.position;
+      latestRotationRef.current = fLive.rotation;
+      latestCameraPitchRef.current = fLive.cameraPitch;
+      latestFlashlightRef.current = fLive.flashlightOn;
+    }
+
+    const isFlashlightOn = latestFlashlightRef.current;
+
+    // Control flashlight intensity based on state (since we can't conditionally render due to React.memo)
+    spotlightRef.current.intensity = isFlashlightOn ? 40 : 0;
+
+    // Only update position if flashlight is on
+    if (!isFlashlightOn) return;
+
+    const pos = latestPositionRef.current;
+    const yaw = latestRotationRef.current;
+    const pitch = latestCameraPitchRef.current;
+
+    if (!pos) return;
+
+    const dirX = Math.sin(yaw);
+    const dirZ = Math.cos(yaw);
+
+    // Position light at player's chest/gun height (world space)
+    const lightHeight = pos.y + 6;
+    spotlightRef.current.position.set(
+      pos.x + dirX * 1,
+      lightHeight,
+      pos.z + dirZ * 1
+    );
+
+    // Use cameraPitch for vertical aiming
+    // pitch > 0 = looking down, pitch < 0 = looking up
+    const targetDist = 20;
+    const verticalOffset = -Math.sin(pitch) * targetDist;
+    spotlightTargetRef.current.position.set(
+      pos.x + dirX * targetDist,
+      lightHeight + verticalOffset,
+      pos.z + dirZ * targetDist
+    );
+    spotlightTargetRef.current.updateMatrixWorld();
+    spotlightRef.current.target = spotlightTargetRef.current;
   });
 
   // Common component for all player types with explicit states
@@ -701,22 +718,22 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
           />
           
         </RigidBody>
-        {/* Remote player flashlight - truly outside all transform hierarchies */}
-        {flashlightOn && (
-          <group position={[0,0,0]}>
-            <spotLight
-              ref={spotlightRef}
-              color={0xffffdd}
-              intensity={40}
-              distance={80}
-              angle={0.7}
-              penumbra={0.5}
-              decay={1.2}
-              castShadow
-            />
-            <object3D ref={spotlightTargetRef} />
-          </group>
-        )}
+        {/* Remote player flashlight - always render the group, control visibility via intensity
+            This is needed because React.memo blocks re-renders, so we can't conditionally render based on props.
+            Instead, we keep the spotlight mounted and the useFrame hook controls its intensity. */}
+        <group position={[0,0,0]}>
+          <spotLight
+            ref={spotlightRef}
+            color={0xffffdd}
+            intensity={0}
+            distance={80}
+            angle={0.7}
+            penumbra={0.5}
+            decay={1.2}
+            castShadow
+          />
+          <object3D ref={spotlightTargetRef} />
+        </group>
         {/* Player ID tag - positioned higher for the taller merc model */}
         <Html position={[position?.x || 0, (position?.y || 0) + 12, position?.z || 0]} center>
           {/* Only show nametag if this player is on the same team as the local player */}

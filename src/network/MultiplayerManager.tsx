@@ -452,14 +452,17 @@ export const useMultiplayer = (
     // Handle player joined event
     const handlePlayerJoined = (data: any) => {
       console.log("➕ Player joined:", data);
-      
+
+      // Server sends player info as data.player.id, not data.id
+      const playerId = data.player?.id || data.id;
+
       // Skip joining for undefined IDs or local player
-      if (!data.id || data.id === 'undefined' || data.id === connectionManager.getPlayerId()) {
+      if (!playerId || playerId === 'undefined' || playerId === connectionManager.getPlayerId()) {
         console.log('Ignoring join event for local player or undefined ID');
         return;
       }
-      
-      console.log(`Adding new remote player: ${data.id}`);
+
+      console.log(`Adding new remote player: ${playerId}`);
       
       // Get player type from the server data if available, or use a determinate assignment based on player count
       let playerType = data.playerType || data.state?.playerType || 'unknown';
@@ -472,38 +475,38 @@ export const useMultiplayer = (
         console.log(`No player type in data - assigning based on player count: ${playerType}`);
       }
       
-      console.log(`Assigning player type ${playerType} to ${data.id}`);
-      
+      console.log(`Assigning player type ${playerType} to ${playerId}`);
+
       // Check if this aligns with expected alternating pattern and log any discrepancies
       const remotePlayerCount = Object.keys(remotePlayers).length;
       const expectedType = remotePlayerCount % 2 === 0 ? 'jackalope' : 'merc';
       if (playerType !== expectedType) {
-        console.log(`⚠️ Player ${data.id} has type ${playerType} but expected ${expectedType} based on remote player count ${remotePlayerCount}`);
+        console.log(`⚠️ Player ${playerId} has type ${playerType} but expected ${expectedType} based on remote player count ${remotePlayerCount}`);
       }
-      
-      console.log(`Final player type assignment for ${data.id}: ${playerType}`);
-      
+
+      console.log(`Final player type assignment for ${playerId}: ${playerType}`);
+
       setRemotePlayers(prev => {
         // Skip if player already exists
-        if (prev[data.id]) {
-          console.log(`Player ${data.id} already exists in our list`);
+        if (prev[playerId]) {
+          console.log(`Player ${playerId} already exists in our list`);
           return prev;
         }
-        
+
         // Convert position and rotation to the format expected by RemotePlayer
-        const position = data.state?.position 
-          ? arrayToObjectPosition(data.state.position) 
+        const position = data.state?.position
+          ? arrayToObjectPosition(data.state.position)
           : playerType === 'merc' ? { x: 10, y: 7, z: 10 } : { x: -100, y: 7, z: 10 };
-          
-        const rotation = data.state?.rotation 
-          ? quaternionToAngle(data.state.rotation) 
+
+        const rotation = data.state?.rotation
+          ? quaternionToAngle(data.state.rotation)
           : 0;
-        
+
         // Add the new player with their initial state
         return {
           ...prev,
-          [data.id]: {
-            playerId: data.id,
+          [playerId]: {
+            playerId: playerId,
             position,
             rotation,
             lastUpdate: Date.now(),
@@ -519,20 +522,23 @@ export const useMultiplayer = (
     
     const handlePlayerLeft = (data: any) => {
       console.log("➖ Player left:", data);
-      
+
+      // Server sends player id as data.player, not data.id
+      const playerId = data.player || data.id;
+
       // Also clean up rate limiting data for this player
-      if (playerUpdateThrottleRef.current[data.id]) {
-        delete playerUpdateThrottleRef.current[data.id];
+      if (playerUpdateThrottleRef.current[playerId]) {
+        delete playerUpdateThrottleRef.current[playerId];
       }
-      
+
       setRemotePlayers(prev => {
-        if (!prev[data.id]) {
+        if (!prev[playerId]) {
           return prev;
         }
-        
+
         // Create a new object without this player
         const newPlayers = { ...prev };
-        delete newPlayers[data.id];
+        delete newPlayers[playerId];
         return newPlayers;
       });
     };
@@ -1510,6 +1516,7 @@ export const MultiplayerManager: React.FC<{
     isRunning: boolean;
     isShooting: boolean;
     lastUpdate: number;
+    playerType?: 'merc' | 'jackalope';
   }>>({});
 
   // Expose on window so RemotePlayer can read it without prop drilling
@@ -1609,14 +1616,17 @@ export const MultiplayerManager: React.FC<{
     // Handle player joined event
     const handlePlayerJoined = (data: any) => {
       console.log("➕ Player joined:", data);
-      
+
+      // Server sends player info as data.player.id, not data.id
+      const playerId = data.player?.id || data.id;
+
       // Skip joining for undefined IDs or local player
-      if (!data.id || data.id === 'undefined' || data.id === connectionManager.getPlayerId()) {
+      if (!playerId || playerId === 'undefined' || playerId === connectionManager.getPlayerId()) {
         console.log('Ignoring join event for local player or undefined ID');
         return;
       }
-      
-      console.log(`Adding new remote player: ${data.id}`);
+
+      console.log(`Adding new remote player: ${playerId}`);
       
       // Get player type from the server data if available, or use a determinate assignment based on player count
       let playerType = data.playerType || data.state?.playerType || 'unknown';
@@ -1629,38 +1639,38 @@ export const MultiplayerManager: React.FC<{
         console.log(`No player type in data - assigning based on player count: ${playerType}`);
       }
       
-      console.log(`Assigning player type ${playerType} to ${data.id}`);
-      
+      console.log(`Assigning player type ${playerType} to ${playerId}`);
+
       // Check if this aligns with expected alternating pattern and log any discrepancies
       const remotePlayerCount = Object.keys(remotePlayers).length;
       const expectedType = remotePlayerCount % 2 === 0 ? 'jackalope' : 'merc';
       if (playerType !== expectedType) {
-        console.log(`⚠️ Player ${data.id} has type ${playerType} but expected ${expectedType} based on remote player count ${remotePlayerCount}`);
+        console.log(`⚠️ Player ${playerId} has type ${playerType} but expected ${expectedType} based on remote player count ${remotePlayerCount}`);
       }
-      
-      console.log(`Final player type assignment for ${data.id}: ${playerType}`);
-      
+
+      console.log(`Final player type assignment for ${playerId}: ${playerType}`);
+
       setRemotePlayers(prev => {
         // Skip if player already exists
-        if (prev[data.id]) {
-          console.log(`Player ${data.id} already exists in our list`);
+        if (prev[playerId]) {
+          console.log(`Player ${playerId} already exists in our list`);
           return prev;
         }
-        
+
         // Convert position and rotation to the format expected by RemotePlayer
-        const position = data.state?.position 
-          ? arrayToObjectPosition(data.state.position) 
+        const position = data.state?.position
+          ? arrayToObjectPosition(data.state.position)
           : playerType === 'merc' ? { x: 10, y: 7, z: 10 } : { x: -100, y: 7, z: 10 };
-          
-        const rotation = data.state?.rotation 
-          ? quaternionToAngle(data.state.rotation) 
+
+        const rotation = data.state?.rotation
+          ? quaternionToAngle(data.state.rotation)
           : 0;
-        
+
         // Add the new player with their initial state
         return {
           ...prev,
-          [data.id]: {
-            playerId: data.id,
+          [playerId]: {
+            playerId: playerId,
             position,
             rotation,
             lastUpdate: Date.now(),
@@ -1689,17 +1699,22 @@ export const MultiplayerManager: React.FC<{
         
         // Create a new object without this player
         const newPlayers = { ...prev };
-        delete newPlayers[data.id];
+        delete newPlayers[playerId];
         return newPlayers;
       });
       // Also clean up live data
-      delete livePlayerData.current[data.id];
+      delete livePlayerData.current[playerId];
     };
     
     const handlePlayerUpdate = (data: any) => {
       // Skip updates from ourselves or with undefined IDs
       if (data.id === connectionManager.getPlayerId() || !data.id || data.id === 'undefined') {
         return;
+      }
+
+      // DEBUG: Log flashlight data occasionally
+      if (Math.random() < 0.01) {
+        console.log(`🔦 Player ${data.id} update - flashlightOn: ${data.state?.flashlightOn}, cameraPitch: ${data.state?.cameraPitch?.toFixed(2)}`);
       }
 
       const now = Date.now();
@@ -1732,6 +1747,8 @@ export const MultiplayerManager: React.FC<{
       }
 
       // *** HOT PATH: write directly to ref store — NO React re-render ***
+      // Preserve playerType from previous data or get from incoming data
+      const playerType = data.playerType || data.state?.playerType || prevLive?.playerType || 'merc';
       livePlayerData.current[data.id] = {
         position,
         rotation,
@@ -1741,6 +1758,7 @@ export const MultiplayerManager: React.FC<{
         isRunning,
         isShooting: data.state?.isShooting ?? prevLive?.isShooting ?? false,
         lastUpdate: now,
+        playerType,
       };
 
       // *** COLD PATH: only trigger React for structural changes (new player) ***
