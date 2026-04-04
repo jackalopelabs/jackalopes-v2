@@ -1494,7 +1494,7 @@ export const RemotePlayers = React.memo(({
       {Object.entries(players).filter(([id]) => id && id !== 'undefined')
         .map(([id, playerData]) => (
         <RemotePlayer
-          key={id}
+          key={`${id}-${playerData.playerType || 'merc'}`}
           playerId={id}
           position={playerData.position}
           rotation={playerData.rotation}
