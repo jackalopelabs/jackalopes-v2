@@ -1260,6 +1260,7 @@ export function App() {
 
     // Game round state
     const [gameOver, setGameOver] = useState(false);
+    const [roundKey, setRoundKey] = useState(0);
     const [hitMarker, setHitMarker] = useState(false);
     const hitMarkerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1275,30 +1276,6 @@ export function App() {
     const handleRoundEnd = useCallback(() => {
         setGameOver(true);
     }, []);
-
-    // Play again handler
-    const handlePlayAgain = useCallback(() => {
-        setGameOver(false);
-        setJackalopesScore(0);
-        setMercsScore(0);
-        localStorage.setItem('jackalopes_score', '0');
-        localStorage.setItem('mercs_score', '0');
-
-        // Broadcast reset
-        if (enableMultiplayer && connectionManager?.isReadyToSend()) {
-            connectionManager.sendMessage({
-                type: 'game_event',
-                event: {
-                    event_type: 'game_score_update',
-                    source: 'round_reset',
-                    jackalopesScore: 0,
-                    mercsScore: 0,
-                    timestamp: Date.now(),
-                    shotId: `reset-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
-                }
-            });
-        }
-    }, [enableMultiplayer, connectionManager]);
 
     // Host tracking for score and timer synchronization
     const [isHost, setIsHost] = useState(false);
@@ -1601,6 +1578,30 @@ export function App() {
         collapsed: true,
         order: 997
     });
+
+    // Play again handler (needs enableMultiplayer + connectionManager)
+    const handlePlayAgain = useCallback(() => {
+        setGameOver(false);
+        setRoundKey(k => k + 1);
+        setJackalopesScore(0);
+        setMercsScore(0);
+        localStorage.setItem('jackalopes_score', '0');
+        localStorage.setItem('mercs_score', '0');
+
+        if (enableMultiplayer && connectionManager?.isReadyToSend()) {
+            connectionManager.sendMessage({
+                type: 'game_event',
+                event: {
+                    event_type: 'game_score_update',
+                    source: 'round_reset',
+                    jackalopesScore: 0,
+                    mercsScore: 0,
+                    timestamp: Date.now(),
+                    shotId: `reset-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
+                }
+            });
+        }
+    }, [enableMultiplayer, connectionManager]);
 
     // Set to false initially to hide the panel by default
     const [showMultiplayerTools, setShowMultiplayerTools] = useState(false);
@@ -4241,6 +4242,7 @@ export function App() {
                 matchDuration={matchTimerData?.matchDuration}
                 serverTime={matchTimerData?.serverTime}
                 onTimerEnd={handleRoundEnd}
+                roundKey={roundKey}
             />
 
             {/* Crosshair for mercs */}

@@ -9,6 +9,7 @@ interface GameHUDProps {
   serverTime?: number;
   isHost?: boolean;
   onTimerEnd?: () => void;
+  roundKey?: number; // increment to reset the timer for a new round
 }
 
 export const GameHUD: React.FC<GameHUDProps> = ({
@@ -20,12 +21,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   serverTime,
   isHost = false,
   onTimerEnd,
+  roundKey = 0,
 }) => {
   const [timeRemaining, setTimeRemaining] = useState(() => {
     if (matchStartTime && matchDuration) {
       const clockOffset = serverTime ? (Date.now() - serverTime) : 0;
       const elapsed = Math.floor((Date.now() - matchStartTime - clockOffset) / 1000);
-      return Math.max(0, matchDuration - elapsed);
+      const remaining = matchDuration - elapsed;
+      // If match data is stale (already expired), start a fresh round
+      if (remaining <= 0) return matchDuration;
+      return remaining;
     }
     return matchDuration;
   });
@@ -71,9 +76,18 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     if (matchStartTime && matchDuration) {
       const clockOffset = serverTime ? (Date.now() - serverTime) : 0;
       const elapsed = Math.floor((Date.now() - matchStartTime - clockOffset) / 1000);
-      setTimeRemaining(Math.max(0, matchDuration - elapsed));
+      const remaining = matchDuration - elapsed;
+      // Only sync if the match is still active; ignore stale data
+      if (remaining > 0) {
+        setTimeRemaining(remaining);
+      }
     }
   }, [matchStartTime, matchDuration, serverTime]);
+
+  // Reset timer when a new round starts
+  useEffect(() => {
+    setTimeRemaining(matchDuration);
+  }, [roundKey, matchDuration]);
 
   // Listen for host timer syncs
   useEffect(() => {
