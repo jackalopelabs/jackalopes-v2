@@ -750,6 +750,7 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     const [attachedProjectiles, setAttachedProjectiles] = useState<{id: string, position: THREE.Vector3}[]>([]);
     const attachedProjectilesRef = useRef<{id: string, position: THREE.Vector3}[]>([]);
     const rigidBodyRef = useRef<any>(null);
+    const jackalopeModelGroupRef = useRef<THREE.Group>(null);
     
     // Refs to latest prop values — always fresh in useFrame (avoids stale closure lag)
     const jackalopePositionRef = useRef<{ x: number; y: number; z: number } | null>(null);
@@ -805,6 +806,17 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
       jackalopeCurrentRotation.current += jRotDiff * rotSpeed;
       const quat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), jackalopeCurrentRotation.current);
       rigidBodyRef.current.setNextKinematicRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
+
+      // Update model group in world space — OUTSIDE the RigidBody, matching local jackalope exactly
+      // Local: group position = [physicsX, physicsY - 0.65, physicsZ], rotation = current + PI
+      if (jackalopeModelGroupRef.current) {
+        jackalopeModelGroupRef.current.position.set(
+          jackalopeSmoothedPos.current.x,
+          jackalopeSmoothedPos.current.y - 0.65,
+          jackalopeSmoothedPos.current.z
+        );
+        jackalopeModelGroupRef.current.rotation.set(0, jackalopeCurrentRotation.current, 0);
+      }
     });
 
     // Add state for managing hit and respawn
@@ -1162,17 +1174,6 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
               {/* Extra collider to catch projectiles */}
               <BallCollider args={[2.4]} position={[0, 1.6, 0]} sensor={false} friction={1} restitution={0.1} />
               
-              {/* Model offset: physics Y is capsule center (~2.24 on ground).
-                 Local jackalope renders at physicsY - 0.65 with capsule offset -0.65.
-                 Capsule half-height=1.0 + radius=0.5 = 1.5 below center.
-                 So feet = physicsY - 0.65 - 1.5 = physicsY - 2.15.
-                 Remote model inside RigidBody at physicsY, so offset = -2.15 */}
-              <JackalopeModel 
-                position={[0, -2.15, 0]} 
-                rotation={[0, 0, 0]} 
-                scale={[2, 2, 2]}
-              />
-              
               {/* Show invulnerability effect when necessary */}
               {isInvulnerable && (
                 <mesh>
@@ -1193,6 +1194,22 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
             </>
           )}
         </RigidBody>
+
+        {/* Model group OUTSIDE RigidBody — positioned in world space, matching local jackalope */}
+        {!isHit && (
+          <group
+            ref={jackalopeModelGroupRef}
+            scale={[2, 2, 2]}
+            position={position ? [position.x, position.y - 0.65, position.z] : [0, -0.65, 0]}
+            rotation={[0, (rotation || 0) + Math.PI, 0]}
+          >
+            <JackalopeModel
+              position={[0, 0, 0]}
+              rotation={[0, 0, 0]}
+              scale={[1, 1, 1]}
+            />
+          </group>
+        )}
         
         {/* Player ID tag - only show when not hit/respawning */}
         {!isHit && !isRespawning && (
@@ -1256,6 +1273,9 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     };
   }, [playerId, playerType]);
 
+  // FALLBACK PATH — if we reach here, playerType didn't match 'merc' or 'jackalope'
+  console.warn(`⚠️ RemotePlayer ${playerId} hit FALLBACK renderer! playerType='${playerType}'`);
+
   return (
     <group 
       ref={groupRef}
@@ -1288,9 +1308,9 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
           />
         ) : (
           <JackalopeModel 
-            position={[0, -0.9, 0]} 
+            position={[0, -2.72, 0]} 
             rotation={[0, 0, 0]} 
-            scale={[2, 2, 2]} // Increase to 2x scale
+            scale={[2, 2, 2]}
           />
         )}
       </mesh>
