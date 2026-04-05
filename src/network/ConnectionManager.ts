@@ -612,7 +612,7 @@ export class ConnectionManager extends EventEmitter {
     this.playerType = type;
   }
   
-  // Update the sendPlayerUpdate method to include flashlight state
+  // Update the sendPlayerUpdate method to include flashlight state and movement state
   sendPlayerUpdate(updateData: {
     position: [number, number, number],
     rotation: [number, number, number, number],
@@ -620,7 +620,9 @@ export class ConnectionManager extends EventEmitter {
     sequence?: number,
     playerType?: 'merc' | 'jackalope',
     flashlightOn?: boolean,
-    cameraPitch?: number
+    cameraPitch?: number,
+    isWalking?: boolean,
+    isRunning?: boolean
   }): void {
     if (!this.isReadyToSend()) {
       this.log(LogLevel.WARN, 'Cannot send player update, WebSocket not ready');
@@ -646,7 +648,7 @@ export class ConnectionManager extends EventEmitter {
       this.log(LogLevel.VERBOSE, `Sending player update: pos=${updateData.position.join(',')}, rot=${updateData.rotation.join(',')}, type=${typeToSend}, flashlight=${flashlightState}`);
     }
     
-    if (!this.offlineMode) { 
+    if (!this.offlineMode) {
       // For online mode, send to server
       this.send({
         type: 'player_update',
@@ -657,7 +659,9 @@ export class ConnectionManager extends EventEmitter {
           sequence: updateData.sequence || Date.now(),
           playerType: typeToSend,
           flashlightOn: flashlightState,
-          cameraPitch: updateData.cameraPitch || 0
+          cameraPitch: updateData.cameraPitch || 0,
+          isWalking: updateData.isWalking || false,
+          isRunning: updateData.isRunning || false
         }
       });
     } else {
@@ -750,13 +754,126 @@ export class ConnectionManager extends EventEmitter {
     };
     
     this.log(LogLevel.INFO, `Sending respawn request for player ${playerId}, ID: ${respawnId}, position: ${respawnData.event.spawnPosition.join(',')}`);
-    
+
     // Send to server
     this.send(respawnData);
-    
+
     // Also broadcast via localStorage for cross-browser testing
     if (window.location.hostname === 'localhost') {
       this.broadcastViaLocalStorage(respawnData);
+    }
+  }
+
+  // Send a mushroom eaten event (for multiplayer sync)
+  // Includes decoy position/rotation so other players can spawn the decoy
+  sendMushroomEaten(
+    mushroomId: string,
+    decoyId: string,
+    decoyPosition: [number, number, number],
+    decoyRotation: number
+  ): void {
+    if (!this.isReadyToSend()) {
+      this.log(LogLevel.WARN, 'Cannot send mushroom eaten event, WebSocket not ready');
+      return;
+    }
+
+    const mushroomData = {
+      type: 'game_event',
+      event: {
+        event_type: 'mushroom_eaten',
+        mushroomId,
+        decoyId,
+        decoyPosition,
+        decoyRotation,
+        player_id: this.playerId,
+        timestamp: Date.now()
+      }
+    };
+
+    this.log(LogLevel.DEBUG, `Sending mushroom eaten event: ${mushroomId} with decoy ${decoyId} at (${decoyPosition.join(', ')})`);
+    this.send(mushroomData);
+
+    // Also broadcast via localStorage for cross-browser testing
+    if (window.location.hostname === 'localhost') {
+      this.broadcastViaLocalStorage(mushroomData);
+    }
+  }
+
+  // Send a decoy destroyed event so all clients remove the same decoy
+  sendDecoyDestroyed(decoyId: string): void {
+    if (!this.isReadyToSend()) {
+      this.log(LogLevel.WARN, 'Cannot send decoy destroyed event, WebSocket not ready');
+      return;
+    }
+
+    const decoyDestroyedData = {
+      type: 'game_event',
+      event: {
+        event_type: 'decoy_destroyed',
+        decoyId,
+        player_id: this.playerId,
+        timestamp: Date.now()
+      }
+    };
+
+    this.log(LogLevel.DEBUG, `Sending decoy destroyed event for ${decoyId}`);
+    this.send(decoyDestroyedData);
+
+    if (window.location.hostname === 'localhost') {
+      this.broadcastViaLocalStorage(decoyDestroyedData);
+    }
+  }
+
+  // Send a golden trail decoy spawn event so remote players can see golden egg decoys
+  sendGoldenTrailDecoy(decoyId: string, position: [number, number, number], rotation: number): void {
+    if (!this.isReadyToSend()) {
+      this.log(LogLevel.WARN, 'Cannot send golden trail decoy event, WebSocket not ready');
+      return;
+    }
+
+    const decoyData = {
+      type: 'game_event',
+      event: {
+        event_type: 'golden_trail_decoy_spawn',
+        decoyId,
+        decoyPosition: position,
+        decoyRotation: rotation,
+        player_id: this.playerId,
+        timestamp: Date.now()
+      }
+    };
+
+    this.log(LogLevel.DEBUG, `Sending golden trail decoy spawn ${decoyId} at (${position.join(', ')})`);
+    this.send(decoyData);
+
+    if (window.location.hostname === 'localhost') {
+      this.broadcastViaLocalStorage(decoyData);
+    }
+  }
+
+  // Send a rainbow egg flashbang event so mercs can be blinded remotely
+  sendRainbowFlashbang(duration: number = 5000): void {
+    if (!this.isReadyToSend()) {
+      this.log(LogLevel.WARN, 'Cannot send rainbow flashbang event, WebSocket not ready');
+      return;
+    }
+
+    const flashbangData = {
+      type: 'game_event',
+      event: {
+        event_type: 'rainbow_flashbang',
+        player_id: this.playerId,
+        playerType: this.playerType,
+        duration,
+        timestamp: Date.now()
+      }
+    };
+
+    this.log(LogLevel.INFO, `Sending rainbow flashbang event for ${duration}ms`);
+    this.send(flashbangData);
+
+    if (window.location.hostname === 'localhost') {
+      this.broadcastViaLocalStorage(flashbangData);
     }
   }
 
@@ -1028,6 +1145,21 @@ export class ConnectionManager extends EventEmitter {
           matchDuration: message.matchDuration,
           serverTime: message.serverTime
         });
+        break;
+
+      case 'chat':
+        this.log(LogLevel.INFO, '💬 chat from server:', message);
+        this.emit('chat', message);
+        break;
+
+      case 'voice_signal':
+        this.log(LogLevel.INFO, '🎙️ voice_signal from server:', message);
+        this.emit('voice_signal', message);
+        break;
+
+      case 'flashlight_pickup':
+        this.log(LogLevel.INFO, '🔦 flashlight_pickup from server:', message);
+        this.emit('flashlight_pickup', message);
         break;
         
       default:
@@ -1337,6 +1469,28 @@ export class ConnectionManager extends EventEmitter {
   // Public wrapper for send method
   sendMessage(data: any): void {
     this.send(data);
+  }
+
+  sendFlashlightPickup(): void {
+    if (!this.isReadyToSend()) {
+      this.log(LogLevel.WARN, 'Cannot send flashlight pickup, WebSocket not ready');
+      return;
+    }
+
+    if (!this.sessionJoined && !this.offlineMode) {
+      this.log(LogLevel.WARN, 'Cannot send flashlight pickup, session not joined yet');
+      return;
+    }
+
+    this.log(LogLevel.INFO, '🔦 Sending flashlight pickup to server via game_event');
+    this.send({
+      type: 'game_event',
+      event: {
+        event_type: 'flashlight_pickup',
+        player_id: this.playerId,
+        timestamp: Date.now()
+      }
+    });
   }
 
   // Send a game snapshot

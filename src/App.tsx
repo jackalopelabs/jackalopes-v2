@@ -14,16 +14,19 @@ import { Player, PlayerControls } from './game/player'
 import { Jackalope } from './game/jackalope'
 import { SphereTool, setSphereDarkMode } from './game/sphere-tool'
 import { Platforms } from './game/platforms'
+import { MushroomField } from './game/MushroomField'
+import { GoldenEggField } from './game/GoldenEggField'
+import { RainbowEggField } from './game/RainbowEggField'
 import { MultiplayerManager, useRemoteShots } from './network/MultiplayerManager'
 import { NetworkStats } from './network/NetworkStats'
 import { ConnectionManager } from './network/ConnectionManager'
 import { ConnectionTest } from './components/ConnectionTest'
 import { VirtualGamepad } from './components/VirtualGamepad'
 import { RemotePlayer } from './game/RemotePlayer'
-import { AudioController } from './components/AudioController' // Import the AudioController component
 import { WeaponSoundEffects } from './components/WeaponSoundEffects' // Import the WeaponSoundEffects component
 import { HealthBar } from './components/HealthBar' // Import the HealthBar component
-import { AudioToggleButton } from './components/AudioToggleButton' // Import the AudioToggleButton component
+import { AudioCommsPanel } from './components/AudioCommsPanel'
+import { FlashlightPickup } from './components/FlashlightPickup'
 import { initDebugSystem, DEBUG_LEVELS } from './utils/debugUtils';
 import { PlayerPositionTracker } from './components/PlayerPositionTracker';
 import entityStateObserver from './network/EntityStateObserver';
@@ -41,6 +44,7 @@ import { Crosshair as GameCrosshair } from './components/Crosshair';
 import { KillFeed, emitKillFeed } from './components/KillFeed';
 import { GameHUD } from './components/GameHUD';
 import { ScreenShake, triggerScreenShake } from './components/ScreenShake';
+import { RespawnButton } from './components/RespawnButton';
 
 // Add TypeScript declaration for window.__setGraphicsQuality
 declare global {
@@ -57,7 +61,12 @@ declare global {
             playerType?: 'merc' | 'jackalope';
             levaPanelState?: 'open' | 'closed';
             flashlightOn?: boolean; // Add flashlight state
+            flashlightCollected?: boolean;
             debugLevel?: number; // Store debug level
+            inventory?: {
+                goldenEggs: number;
+                rainbowEggs: number;
+            };
             // Add spawn manager
             spawnManager?: {
                 baseSpawnX: number;
@@ -736,6 +745,9 @@ const ThirdPersonCameraControls = ({
     const lastMouseRef = useRef({ x: 0, y: 0 });
     const playerType = useRef<'merc' | 'jackalope'>('merc');
 
+    // Gamepad state for camera control
+    const gamepadRef = useRef<Gamepad | null>(null);
+
     // Get player character type from the App
     useEffect(() => {
         // Try to determine player type based on the global state
@@ -857,6 +869,32 @@ const ThirdPersonCameraControls = ({
     // Use frame loop to update the camera smoothly
     useFrame((_, delta) => {
         if (!enabled || !cameraRef.current) return;
+
+        // Gamepad right stick camera control
+        const gamepad = navigator.getGamepads()[0];
+        if (gamepad) {
+            const STICK_DEADZONE = 0.15;
+            const CAMERA_SENSITIVITY_X = 0.05;
+            const CAMERA_SENSITIVITY_Y = 0.035;
+
+            const rightX = Math.abs(gamepad.axes[2]) > STICK_DEADZONE ? gamepad.axes[2] : 0;
+            const rightY = Math.abs(gamepad.axes[3]) > STICK_DEADZONE ? gamepad.axes[3] : 0;
+
+            if (rightX !== 0 || rightY !== 0) {
+                // Update rotation based on right stick
+                rotationRef.current.y -= rightX * CAMERA_SENSITIVITY_X;
+
+                // Apply Y rotation with or without inversion
+                if (invertY) {
+                    rotationRef.current.x -= rightY * CAMERA_SENSITIVITY_Y;
+                } else {
+                    rotationRef.current.x += rightY * CAMERA_SENSITIVITY_Y;
+                }
+
+                // Clamp vertical rotation
+                rotationRef.current.x = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, rotationRef.current.x));
+            }
+        }
 
         try {
             // Only update with valid player position
@@ -1194,6 +1232,33 @@ const ModelPreloader = () => {
   return null;
 };
 
+const MercFlashblindOverlay = ({ until }: { until: number }) => {
+    const [now, setNow] = useState(Date.now())
+
+    useEffect(() => {
+        const interval = setInterval(() => setNow(Date.now()), 50)
+        return () => clearInterval(interval)
+    }, [])
+
+    const remaining = Math.max(0, until - now)
+    if (remaining <= 0) return null
+
+    const progress = remaining / 5000
+    const opacity = 0.15 + progress * 0.85
+
+    return (
+        <div style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 5000,
+            pointerEvents: 'none',
+            background: `rgba(255,255,255,${opacity})`,
+            transition: 'background 50ms linear',
+            boxShadow: 'inset 0 0 80px rgba(255,255,255,0.95)',
+        }} />
+    )
+}
+
 export function App() {
     // Replace useLoadingAssets with useProgress implementation
     const { active } = useProgress()
@@ -1253,6 +1318,9 @@ export function App() {
 
     // Add health state
     const [playerHealth, setPlayerHealth] = useState(100);
+    const [goldenEggCount, setGoldenEggCount] = useState(0);
+    const [rainbowEggCount, setRainbowEggCount] = useState(0);
+    const [mercFlashblindUntil, setMercFlashblindUntil] = useState(0);
 
     // Add score state
     const [jackalopesScore, setJackalopesScore] = useState(0);
@@ -1282,6 +1350,7 @@ export function App() {
 
     // Add a ref to track the last time a score was updated
     const lastScoreTime = useRef<number>(0);
+    const lastScoreResetTime = useRef<number>(0);
 
     // Track which jackalopes have been hit to avoid double-counting
     // This is shared between both scoring mechanisms
@@ -1585,6 +1654,9 @@ export function App() {
         setRoundKey(k => k + 1);
         setJackalopesScore(0);
         setMercsScore(0);
+        setGoldenEggCount(0);
+        setRainbowEggCount(0);
+        window.dispatchEvent(new CustomEvent('golden_trail_clear'))
         localStorage.setItem('jackalopes_score', '0');
         localStorage.setItem('mercs_score', '0');
 
@@ -2662,54 +2734,163 @@ export function App() {
         };
     }, [enableMultiplayer, playerCharacterInfo.type, thirdPersonView]);
 
+    // Jackalope icon SVG component
+    const JackalopeIcon: React.FC<{ size?: number; opacity?: number }> = ({ size = 24, opacity = 0.9 }) => (
+        <svg height={size} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 33" style={{ fill: 'white', opacity }}>
+            <path d="M12.7 14.6c-2 0-3.9.3-5.8 1.2-2.1 1-3.2 3.4-4.2 5.4-.3.8-.5 1.7-.7 2.5-.1.9.1 1.8-.1 2.7-2.4-.4-1.2 5.9.6 4.1-.2 1.5.6 1.6 1.7 1.1 1-.5 1.9-.6 3-.8.8-.1.7-.2 1.1-.8.1-.3.6-1 1.1-.7.6.3-.2 2.1-.1 2.8.1 1.1 1.2.7 2.2.8.9 0 1.8.2 2.7.1.5 0 1.1 0 1.4-.4.3-.5.1-1-.2-1.3-.7-.5-1.9-.3-2.8-.2-1.2.1-1.9-.2-1.4-1.5.4-1 .9-1.9 1.3-2.8.4-1 .3-2.4 1.6-2.1 1.4.4 1.5 1.2 1.7 2.5.3 1.4 1.2 5.6 3.1 5.1.2 0 .2-.7.4-.9.3 0 .6.6 1 .6.8-.2.5-.5.1-1-.9-1.1-.9-1.9-1.1-3.2-.2-1.1-.9-2.4-.8-3.4 0-1 1.3-1.6 2-2.2.9-.8 1.4-1.6 1.7-2.7.1-.5.2-1.2.6-1.5.4-.3.9 0 1.3-.1.9-.1 1.9-.6 2-1.6.1-1.1-.5-1.9-.5-2.8 0-.8.4-.8-.3-1.4-.4-.3-1-.4-.8-1 .1-.5.8-1.3 1.2-1.6.4-.4.7-.8 1.1-1.2.9-1 2-.5 3.1-1.9-.7-.2-1.8 1.4-2.2.5-.2-.5.7-2.5 1.1-3 .5-1 1.4-1.9 0-3.8-.2.9.1 1.1-.1 2.1-.2 1.1-.7 2-1.4 2.9-.6 1-1.2 2-1.7 3.1-.3.5-1.2 2.6-1.9 2.7-1 .1 0-2.3.2-2.9.4-1.1.8-2.1 1-3.2.1-.9.5-2.3 0-3.2-.5-1-2-1.1-2.5 0-.8 1.8 1 4.7-.2 6.3-1 1.4-1-1-.9-1.6.2-1.1-.5-1.7-.7-2.9-.1-.6-.1-1.3-.2-1.9-.4.4-.5 1-.4 1.4-.5.1-.7-.6-1.1-.8-.5-.2-1.1 0-1.4.3-.9.7-.4 2.1-.1 3 .4 1.1.7 2.1 1.1 3.2.5 1.1 1.2 2.1 1.6 3.2.3 1-.6 2.2-1.6 2.3"></path>
+        </svg>
+    );
+
+    // Merc/Astronaut icon SVG component
+    const MercIcon: React.FC<{ size?: number; opacity?: number }> = ({ size = 24, opacity = 0.9 }) => (
+        <svg height={size} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style={{ fill: 'white', opacity }}>
+            {/* Astronaut helmet */}
+            <path d="M12 2C9.24 2 7 4.24 7 7v2.59c-1.76.77-3 2.53-3 4.59v1.41c0 1.44.73 2.72 1.84 3.48-.11.31-.18.63-.18.98 0 1.66 1.34 3 3 3h6.68c1.66 0 3-1.34 3-3 0-.35-.07-.67-.18-.98C19.27 18.31 20 17.03 20 15.59v-1.41c0-2.06-1.24-3.82-3-4.59V7c0-2.76-2.24-5-5-5zm0 2c1.65 0 3 1.35 3 3v2h-6V7c0-1.65 1.35-3 3-3zm-4 7h8c1.1 0 2 .9 2 2v1.59c0 .89-.46 1.69-1.17 2.15-.35-.45-.9-.74-1.51-.74h-6.64c-.61 0-1.16.29-1.51.74-.71-.46-1.17-1.26-1.17-2.15V13c0-1.1.9-2 2-2zm0 2.5c-.55 0-1 .45-1 1s.45 1 1 1 1-.45 1-1-.45-1-1-1zm8 0c-.55 0-1 .45-1 1s.45 1 1 1 1-.45 1-1-.45-1-1-1zm-6.32 3.5h6.64c.55 0 1 .45 1 1s-.45 1-1 1H9.68c-.55 0-1-.45-1-1s.45-1 1-1z"/>
+        </svg>
+    );
+
+    // Player count display component for HUD corners - shows repeated icons
+    const PlayerCountDisplay: React.FC<{ playerType: 'jackalope' | 'merc'; position: 'left' | 'right' }> = ({ playerType, position }) => {
+        const [count, setCount] = useState(0);
+
+        useEffect(() => {
+            const updateCount = () => {
+                const liveData = (window as any).__livePlayerData;
+                // Count remote players of this type
+                let remoteCount = 0;
+                if (liveData) {
+                    remoteCount = Object.values(liveData).filter(
+                        (p: any) => p?.playerType === playerType
+                    ).length;
+                }
+                // Add 1 if local player is this type
+                const localIsThisType = window.jackalopesGame?.playerType === playerType;
+                setCount(remoteCount + (localIsThisType ? 1 : 0));
+            };
+
+            updateCount();
+            const interval = setInterval(updateCount, 500); // Update more frequently
+            return () => clearInterval(interval);
+        }, [playerType]);
+
+        const isJackalope = playerType === 'jackalope';
+        const color = isJackalope ? '#4682B4' : '#ff4500';
+
+        // Don't render if count is 0
+        if (count === 0) return null;
+
+        // Create array of icons to render
+        const icons = Array.from({ length: Math.min(count, 8) }, (_, i) => (
+            <span key={i} style={{ display: 'flex' }}>
+                {isJackalope ? <JackalopeIcon size={22} /> : <MercIcon size={22} />}
+            </span>
+        ));
+
+        return (
+            <div style={{
+                position: 'fixed',
+                top: '15px',
+                [position]: '15px',
+                zIndex: 1000,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '6px 10px',
+                background: `linear-gradient(180deg, ${color}35 0%, ${color}10 100%)`,
+                border: `1px solid ${color}50`,
+                borderRadius: '6px',
+                userSelect: 'none',
+                pointerEvents: 'none',
+            }}>
+                {icons}
+                {count > 8 && (
+                    <span style={{
+                        fontSize: '14px',
+                        fontWeight: 700,
+                        color: '#fff',
+                        marginLeft: '2px',
+                        textShadow: '1px 1px 2px rgba(0,0,0,0.8)',
+                    }}>
+                        +{count - 8}
+                    </span>
+                )}
+            </div>
+        );
+    };
+
     // Create a new component for the flashlight UI indicator
     const FlashlightUI = () => {
         const [isOn, setIsOn] = useState(false);
         const [visible, setVisible] = useState(false);
+        const [collected, setCollected] = useState(false);
+        const [hint, setHint] = useState('');
+        const [nearPickup, setNearPickup] = useState(false);
 
         useEffect(() => {
-            // Initialize with current state if available
             if (window.jackalopesGame?.flashlightOn !== undefined) {
                 setIsOn(window.jackalopesGame.flashlightOn);
             }
+            setCollected(!!window.jackalopesGame?.flashlightCollected);
+            setVisible(window.jackalopesGame?.playerType === 'merc');
 
-            // Check if we're in first person as merc
-            if (window.jackalopesGame?.playerType === 'merc') {
-                setVisible(true);
-            } else {
-                setVisible(false);
-            }
-
-            // Listen for flashlight toggle events
             const handleFlashlightToggle = (event: CustomEvent<{isOn: boolean}>) => {
                 setIsOn(event.detail.isOn);
             };
 
-            // Listen for player type changes
             const handlePlayerTypeChange = () => {
                 setVisible(window.jackalopesGame?.playerType === 'merc');
             };
 
+            const handlePickupChanged = (event: CustomEvent<{collected: boolean}>) => {
+                setCollected(event.detail.collected);
+                if (!event.detail.collected) {
+                    setIsOn(false);
+                }
+            };
+
+            const handleBlocked = () => {
+                setHint('Find the flashlight first');
+                window.setTimeout(() => setHint(''), 1400);
+            };
+
+            const handlePickupNearby = (event: CustomEvent<{nearby: boolean, playerType?: string}>) => {
+                const isMercNearby = event.detail.playerType === 'merc' || event.detail.playerType === undefined;
+                setNearPickup(isMercNearby && event.detail.nearby);
+            };
+
             window.addEventListener('flashlightToggled', handleFlashlightToggle as EventListener);
             window.addEventListener('playerTypeChanged', handlePlayerTypeChange);
+            window.addEventListener('flashlightPickupChanged', handlePickupChanged as EventListener);
+            window.addEventListener('flashlightToggleBlocked', handleBlocked as EventListener);
+            window.addEventListener('flashlightPickupNearby', handlePickupNearby as EventListener);
 
             return () => {
                 window.removeEventListener('flashlightToggled', handleFlashlightToggle as EventListener);
                 window.removeEventListener('playerTypeChanged', handlePlayerTypeChange);
+                window.removeEventListener('flashlightPickupChanged', handlePickupChanged as EventListener);
+                window.removeEventListener('flashlightToggleBlocked', handleBlocked as EventListener);
+                window.removeEventListener('flashlightPickupNearby', handlePickupNearby as EventListener);
             };
         }, []);
 
         if (!visible) return null;
 
+        const label = collected ? `Flashlight: ${isOn ? 'ON' : 'OFF'} [F]` : 'Objective: Find the flashlight';
+        const backgroundColor = collected
+            ? (isOn ? 'rgba(255, 255, 0, 0.3)' : 'rgba(100, 100, 100, 0.3)')
+            : 'rgba(255, 214, 102, 0.18)';
+        const color = collected ? (isOn ? '#ffff00' : '#aaaaaa') : '#ffe08a';
+        const border = collected ? `1px solid ${isOn ? '#ffff00' : '#666666'}` : '1px solid rgba(255, 224, 138, 0.55)';
+
         return (
             <div style={{
                 position: 'absolute',
-                top: '20px',
+                bottom: '20px',
                 left: '20px',
-                padding: '5px 10px',
-                backgroundColor: isOn ? 'rgba(255, 255, 0, 0.3)' : 'rgba(100, 100, 100, 0.3)',
-                color: isOn ? '#ffff00' : '#aaaaaa',
-                border: `1px solid ${isOn ? '#ffff00' : '#666666'}`,
+                padding: '6px 11px',
+                backgroundColor,
+                color,
+                border,
                 borderRadius: '4px',
                 pointerEvents: 'none',
                 fontSize: '12px',
@@ -2717,7 +2898,10 @@ export function App() {
                 userSelect: 'none',
                 zIndex: 1000
             }}>
-                Flashlight: {isOn ? 'ON' : 'OFF'} [F]
+                <div>{label}</div>
+                {!collected && !nearPickup && <div style={{ fontSize: '11px', opacity: 0.85, marginTop: 3 }}>It now spawns inside the walls, closer to center.</div>}
+                {!collected && nearPickup && <div style={{ fontSize: '11px', color: '#fff3b0', marginTop: 3 }}>Press F to pick up flashlight</div>}
+                {hint && <div style={{ fontSize: '11px', color: '#ffd1a1', marginTop: 3 }}>{hint}</div>}
             </div>
         );
     };
@@ -2739,6 +2923,69 @@ export function App() {
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, []);
+
+    // Rainbow egg flashbang ability
+    useEffect(() => {
+        const useRainbowEgg = () => {
+            if (playerCharacterInfo.type !== 'jackalope') return
+            if (rainbowEggCount <= 0) return
+
+            console.log('[RAINBOW_EGG] Jackalope used rainbow egg flashbang')
+            setRainbowEggCount(prev => Math.max(0, prev - 1))
+
+            const duration = 5000
+
+            // Local event for same-client testing / offline play
+            window.dispatchEvent(new CustomEvent('rainbow_flashbang_triggered', {
+                detail: { timestamp: Date.now(), duration }
+            }))
+
+            // Network event so remote mercs get flashed too
+            if (enableMultiplayer && connectionManager?.sendRainbowFlashbang) {
+                connectionManager.sendRainbowFlashbang(duration)
+            }
+        }
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'b' || e.key === 'B') {
+                useRainbowEgg()
+            }
+        }
+
+        const handleMouseDown = (e: MouseEvent) => {
+            if (playerCharacterInfo.type === 'jackalope' && e.button === 0) {
+                useRainbowEgg()
+            }
+        }
+
+        const handleFlashbang = (e: Event) => {
+            const detail = (e as CustomEvent).detail || {}
+            if (playerCharacterInfo.type === 'merc') {
+                const duration = typeof detail.duration === 'number' ? detail.duration : 5000
+                setMercFlashblindUntil(Date.now() + duration)
+            }
+        }
+
+        const handleNetworkGameEvent = (event: any) => {
+            if (event?.event_type === 'rainbow_flashbang' && playerCharacterInfo.type === 'merc') {
+                const duration = typeof event.duration === 'number' ? event.duration : 5000
+                console.log(`[RAINBOW_EGG] Merc received remote flashbang for ${duration}ms`)
+                setMercFlashblindUntil(Date.now() + duration)
+            }
+        }
+
+        window.addEventListener('keydown', handleKeyDown)
+        window.addEventListener('mousedown', handleMouseDown)
+        window.addEventListener('rainbow_flashbang_triggered', handleFlashbang as EventListener)
+        connectionManager?.on?.('game_event', handleNetworkGameEvent)
+
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown)
+            window.removeEventListener('mousedown', handleMouseDown)
+            window.removeEventListener('rainbow_flashbang_triggered', handleFlashbang as EventListener)
+            connectionManager?.off?.('game_event', handleNetworkGameEvent)
+        }
+    }, [playerCharacterInfo.type, rainbowEggCount, enableMultiplayer, connectionManager]);
 
     // Make connectionManager available globally
     useEffect(() => {
@@ -3066,6 +3313,7 @@ export function App() {
             // Only apply timer resets if our scores aren't more recent
             if (!event.reset_time || Date.now() - event.reset_time < 5000) {
               console.log('📊 Processing timer reset from network');
+              lastScoreResetTime.current = Date.now();
               setJackalopesScore(0);
               setMercsScore(0);
               localStorage.setItem('jackalopes_score', '0');
@@ -3117,6 +3365,13 @@ export function App() {
           else {
             // Other score updates (periodic sync, etc)
             console.log('📊 Processing general score update from network');
+
+            // For a brief window after a timer reset, ignore stale general score syncs
+            // so old scores cannot resurrect themselves.
+            if (Date.now() - lastScoreResetTime.current < 3000) {
+              console.log('📊 Ignoring general network score sync during reset protection window');
+              return;
+            }
 
             // For general updates, take the higher score
             const newJackalopesScore = Math.max(jackalopesScore, event.jackalopesScore || 0);
@@ -3174,6 +3429,7 @@ export function App() {
           // Only apply timer resets if our scores aren't more recent
           if (!event.reset_time || Date.now() - event.reset_time < 5000) {
             console.log('📊 Processing timer reset from window event');
+            lastScoreResetTime.current = Date.now();
             setJackalopesScore(0);
             setMercsScore(0);
             localStorage.setItem('jackalopes_score', '0');
@@ -3225,6 +3481,13 @@ export function App() {
         else {
           // Other score updates (periodic sync, etc)
           console.log('📊 Processing general score update from window');
+
+          // For a brief window after a timer reset, ignore stale general score syncs
+          // so old scores cannot resurrect themselves.
+          if (Date.now() - lastScoreResetTime.current < 3000) {
+            console.log('📊 Ignoring general window score sync during reset protection window');
+            return;
+          }
 
           // For general updates, take the higher score
           const newJackalopesScore = Math.max(jackalopesScore, event.jackalopesScore || 0);
@@ -3513,39 +3776,33 @@ export function App() {
         // Mark this reset as processed
         processedScoreUpdates.add(event.id);
 
-        // Check if scores were updated recently
-        const timeSinceLastScore = Date.now() - lastScoreTime.current;
-        if (timeSinceLastScore > 5000 && (jackalopesScore > 0 || mercsScore > 0)) {
-          // Reset scores if it's been more than 5 seconds since the last score update
-          console.log('⏱️ Resetting scores from timer event');
-          setJackalopesScore(0);
-          setMercsScore(0);
-          localStorage.setItem('jackalopes_score', '0');
-          localStorage.setItem('mercs_score', '0');
-          localStorage.setItem('scores_reset_time', Date.now().toString());
+        console.log('⏱️ Resetting scores from timer event');
+        lastScoreResetTime.current = Date.now();
+        setJackalopesScore(0);
+        setMercsScore(0);
+        localStorage.setItem('jackalopes_score', '0');
+        localStorage.setItem('mercs_score', '0');
+        localStorage.setItem('scores_reset_time', Date.now().toString());
 
-          // Broadcast score reset
-          if (enableMultiplayer && connectionManager && connectionManager.isReadyToSend()) {
-            const resetEventId = `reset-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+        // Broadcast score reset
+        if (enableMultiplayer && connectionManager && connectionManager.isReadyToSend()) {
+          const resetEventId = `reset-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
-            connectionManager.sendMessage({
-              type: 'game_event',
-              event: {
-                event_type: 'game_score_update',
-                source: 'timer_reset',
-                jackalopesScore: 0,
-                mercsScore: 0,
-                reset_time: Date.now(),
-                timestamp: Date.now(),
-                shotId: resetEventId
-              }
-            });
+          connectionManager.sendMessage({
+            type: 'game_event',
+            event: {
+              event_type: 'game_score_update',
+              source: 'timer_reset',
+              jackalopesScore: 0,
+              mercsScore: 0,
+              reset_time: Date.now(),
+              timestamp: Date.now(),
+              shotId: resetEventId
+            }
+          });
 
-            // Mark this reset as processed
-            processedScoreUpdates.add(resetEventId);
-          }
-        } else {
-          console.log(`⏱️ Not resetting scores from timer event - scores were updated ${timeSinceLastScore}ms ago`);
+          // Mark this reset as processed
+          processedScoreUpdates.add(resetEventId);
         }
       };
 
@@ -3627,7 +3884,12 @@ export function App() {
         playerType: playerCharacterInfo.type,
         levaPanelState: 'closed',
         flashlightOn: false,
-        debugLevel: 1
+        flashlightCollected: false,
+        debugLevel: 1,
+        inventory: {
+            goldenEggs: goldenEggCount,
+            rainbowEggs: rainbowEggCount,
+        }
     } as any; // Use type assertion to bypass type check
 
     // Create a jackalope spawn position manager
@@ -3672,6 +3934,31 @@ export function App() {
 
     // Add state for intro screen visibility
     const [showIntroScreen, setShowIntroScreen] = useState(false);
+
+    useEffect(() => {
+        if (!connectionManager) return;
+
+        const handleFlashlightPickupEvent = (event: any) => {
+            if (event?.event_type !== 'flashlight_pickup') return;
+            if (!window.jackalopesGame) window.jackalopesGame = {};
+            const existingPickup = window.jackalopesGame.flashlightPickup || {};
+            const nextPickup = {
+                ...existingPickup,
+                collected: true,
+                collectedBy: event.player,
+                collectedAt: event.timestamp || Date.now(),
+            };
+            window.jackalopesGame.flashlightPickup = nextPickup;
+            window.jackalopesGame.flashlightCollected = true;
+            window.dispatchEvent(new CustomEvent('flashlightPickupState', { detail: { flashlightPickup: nextPickup } }));
+            window.dispatchEvent(new CustomEvent('flashlightCollected'));
+        };
+
+        connectionManager.on('game_event', handleFlashlightPickupEvent);
+        return () => {
+            connectionManager.off('game_event', handleFlashlightPickupEvent);
+        };
+    }, [connectionManager]);
 
     // Add effect to show intro screen when player type changes
     useEffect(() => {
@@ -3741,45 +4028,6 @@ export function App() {
             {/* Remove model tester component */}
             {/* {showModelTester && <ModelTester />} */}
 
-            <div style={{
-                position: 'absolute',
-                top: '20px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                color: 'rgba(255, 255, 255, 0.75)',
-                fontSize: '13px',
-                fontFamily: 'monospace',
-                userSelect: 'none',
-                zIndex: 1000
-            }}>
-                <div style={{
-                    background: 'rgba(255, 255, 255, 0.15)',
-                    padding: '8px 12px',
-                    borderRadius: '4px',
-                    letterSpacing: '0.5px',
-                    whiteSpace: 'nowrap'
-                }}>
-                    WASD to move | SPACE to jump | SHIFT to run
-                    {thirdPersonView ? ' | Mouse to rotate camera | ESC to release mouse' : ''}
-                </div>
-            </div>
-
-            {/* Only show ammo display for merc character */}
-            {playerCharacterInfo.type === 'merc' && (
-                <div id="ammo-display" style={{
-                    position: 'absolute',
-                    top: '10px',
-                    right: '10px',
-                    color: 'rgba(255, 255, 255, 0.75)',
-                    fontSize: '14px',
-                    fontFamily: 'monospace',
-                    userSelect: 'none',
-                    zIndex: 1000
-                }}>
-                    AMMO: 50/50
-                </div>
-            )}
-
             <Canvas>
                 {fogEnabled && <fog attach="fog" args={[forceDarkLevel ? '#050a14' : (darkMode ? '#111111' : fogColor), forceDarkLevel ? fogNear * 0.5 : fogNear, forceDarkLevel ? (fogFar * 0.3) : (darkMode ? (fogFar * 0.5) : fogFar)]} />}
                 <Environment
@@ -3845,30 +4093,37 @@ export function App() {
                         {/* Conditionally render either the Player (merc) or Jackalope */}
                         {enableMultiplayer ? (
                             playerCharacterInfo.type === 'merc' ? (
-                                <Player
-                                    ref={playerRef}
-                                    position={[10, 7, 10]}
-                                    walkSpeed={0.02}
-                                    runSpeed={0.025}
-                                    jumpForce={jumpForce * 0.7}
-                                    visible={playerCharacterInfo.thirdPerson}
-                                    thirdPersonView={playerCharacterInfo.thirdPerson}
-                                    playerType={playerCharacterInfo.type}
-                                    connectionManager={enableMultiplayer ? connectionManager : undefined}
-                                    onMove={(position) => {
-                                        // Update player position for camera tracking
-                                        if (playerPosition.current) {
-                                            playerPosition.current.copy(position);
-                                        }
-                                        if (directionalLightRef.current && !playerCharacterInfo.thirdPerson) {
-                                            const light = directionalLightRef.current;
-                                            light.position.x = position.x + directionalDistance;
-                                            light.position.z = position.z + directionalDistance;
-                                            light.target.position.copy(position);
-                                            light.target.updateMatrixWorld();
-                                        }
-                                    }}
-                                />
+                                <>
+                                    <Player
+                                        ref={playerRef}
+                                        position={[10, 7, 10]}
+                                        walkSpeed={0.02}
+                                        runSpeed={0.025}
+                                        jumpForce={jumpForce * 0.7}
+                                        visible={playerCharacterInfo.thirdPerson}
+                                        thirdPersonView={playerCharacterInfo.thirdPerson}
+                                        playerType={playerCharacterInfo.type}
+                                        connectionManager={enableMultiplayer ? connectionManager : undefined}
+                                        onMove={(position) => {
+                                            // Update player position for camera tracking
+                                            if (playerPosition.current) {
+                                                playerPosition.current.copy(position);
+                                            }
+                                            if (directionalLightRef.current && !playerCharacterInfo.thirdPerson) {
+                                                const light = directionalLightRef.current;
+                                                light.position.x = position.x + directionalDistance;
+                                                light.position.z = position.z + directionalDistance;
+                                                light.target.position.copy(position);
+                                                light.target.updateMatrixWorld();
+                                            }
+                                        }}
+                                    />
+                                    <FlashlightPickup
+                                        playerRef={playerRef}
+                                        enabled={playerCharacterInfo.type === 'merc'}
+                                        connectionManager={connectionManager}
+                                    />
+                                </>
                             ) : (
                                 <Jackalope
                                     ref={playerRef}
@@ -3896,28 +4151,35 @@ export function App() {
                             )
                         ) : (
                             characterType === 'merc' ? (
-                                <Player
-                                    ref={playerRef}
-                                    position={[10, 7, 10]}
-                                    walkSpeed={0.02}
-                                    runSpeed={0.025}
-                                    jumpForce={jumpForce * 0.7}
-                                    visible={thirdPersonView}
-                                    thirdPersonView={thirdPersonView}
-                                    playerType={characterType}
-                                    connectionManager={enableMultiplayer ? connectionManager : undefined}
-                                    onMove={(position) => {
-                                        if (directionalLightRef.current && !thirdPersonView) {
-                                            // Only update light directly in first-person mode
-                                            // In third-person, StableLightUpdater handles it
-                                            const light = directionalLightRef.current;
-                                            light.position.x = position.x + directionalDistance;
-                                            light.position.z = position.z + directionalDistance;
-                                            light.target.position.copy(position);
-                                            light.target.updateMatrixWorld();
-                                        }
-                                    }}
-                                />
+                                <>
+                                    <Player
+                                        ref={playerRef}
+                                        position={[10, 7, 10]}
+                                        walkSpeed={0.02}
+                                        runSpeed={0.025}
+                                        jumpForce={jumpForce * 0.7}
+                                        visible={thirdPersonView}
+                                        thirdPersonView={thirdPersonView}
+                                        playerType={characterType}
+                                        connectionManager={enableMultiplayer ? connectionManager : undefined}
+                                        onMove={(position) => {
+                                            if (directionalLightRef.current && !thirdPersonView) {
+                                                // Only update light directly in first-person mode
+                                                // In third-person, StableLightUpdater handles it
+                                                const light = directionalLightRef.current;
+                                                light.position.x = position.x + directionalDistance;
+                                                light.position.z = position.z + directionalDistance;
+                                                light.target.position.copy(position);
+                                                light.target.updateMatrixWorld();
+                                            }
+                                        }}
+                                    />
+                                    <FlashlightPickup
+                                        playerRef={playerRef}
+                                        enabled={characterType === 'merc'}
+                                        connectionManager={connectionManager}
+                                    />
+                                </>
                             ) : (
                                 <Jackalope
                                     ref={playerRef}
@@ -3944,6 +4206,35 @@ export function App() {
                         )}
                     </PlayerControls>
                     <Platforms />
+
+                    {/* Mushroom field - visible to all players, but only jackalopes can eat them */}
+                    <MushroomField
+                        onMushroomEaten={(id) => {
+                            console.log(`[APP] Mushroom ${id} was eaten!`);
+                            // Could add score/power-up logic here in the future
+                        }}
+                        onGoldenTrailDecoySpawned={(id) => {
+                            console.log(`[APP] Golden trail decoy ${id} spawned`)
+                        }}
+                    />
+
+                    {/* Golden easter egg hunt - random hidden collectibles for future jackalope magic */}
+                    <GoldenEggField
+                        eggCount={7}
+                        onEggEaten={(id) => {
+                            console.log(`[APP] Golden egg ${id} was eaten!`)
+                            setGoldenEggCount(prev => prev + 1)
+                            window.dispatchEvent(new CustomEvent('golden_egg_trail_start'))
+                        }}
+                    />
+
+                    <RainbowEggField
+                        eggCount={4}
+                        onEggEaten={(id) => {
+                            console.log(`[APP] Rainbow egg ${id} was eaten!`)
+                            setRainbowEggCount(prev => prev + 1)
+                        }}
+                    />
 
                     <Scene playerRef={playerRef} />
 
@@ -4162,9 +4453,6 @@ export function App() {
                 />
             )}
 
-            {/* Add Audio Controller */}
-            <AudioController />
-
             {/* Add Virtual Gamepad */}
             <VirtualGamepad
                 visible={showVirtualGamepad}
@@ -4243,6 +4531,7 @@ export function App() {
                 serverTime={matchTimerData?.serverTime}
                 onTimerEnd={handleRoundEnd}
                 roundKey={roundKey}
+                inventory={{ goldenEggs: goldenEggCount, rainbowEggs: rainbowEggCount }}
             />
 
             {/* Crosshair for mercs */}
@@ -4253,74 +4542,18 @@ export function App() {
             {/* Kill feed */}
             <KillFeed />
 
-            {/* Add AudioToggleButton for easy audio control - custom positioning when virtual gamepad is shown */}
-            {showVirtualGamepad ? (
-                <div style={{
-                    position: 'fixed',
-                    right: '5px',
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    zIndex: 1000
-                }}>
-                    <AudioToggleButton />
-                </div>
-            ) : (
-                <AudioToggleButton position="bottom-right" />
-            )}
+            <AudioCommsPanel
+                connectionManager={connectionManager}
+                enabled={true}
+                playerType={playerCharacterInfo.type}
+                position={showVirtualGamepad ? 'right-center' : 'bottom-right'}
+            />
 
-            {/* Jackalope Logo Link */}
-            <a
-                href="https://jackalope.io"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                    position: 'fixed',
-                    top: '15px',
-                    left: '15px',
-                    zIndex: 1000,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    transition: 'transform 0.2s ease',
-                }}
-                onMouseOver={(e) => {
-                    e.currentTarget.style.transform = 'scale(1.05)';
-                }}
-                onMouseOut={(e) => {
-                    e.currentTarget.style.transform = 'scale(1)';
-                }}
-            >
-                <svg className="h-8 w-8 mr-2 p-1" height="28" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 33" style={{ fill: 'white', opacity: 0.5 }}>
-                    <path d="M12.7 14.6c-2 0-3.9.3-5.8 1.2-2.1 1-3.2 3.4-4.2 5.4-.3.8-.5 1.7-.7 2.5-.1.9.1 1.8-.1 2.7-2.4-.4-1.2 5.9.6 4.1-.2 1.5.6 1.6 1.7 1.1 1-.5 1.9-.6 3-.8.8-.1.7-.2 1.1-.8.1-.3.6-1 1.1-.7.6.3-.2 2.1-.1 2.8.1 1.1 1.2.7 2.2.8.9 0 1.8.2 2.7.1.5 0 1.1 0 1.4-.4.3-.5.1-1-.2-1.3-.7-.5-1.9-.3-2.8-.2-1.2.1-1.9-.2-1.4-1.5.4-1 .9-1.9 1.3-2.8.4-1 .3-2.4 1.6-2.1 1.4.4 1.5 1.2 1.7 2.5.3 1.4 1.2 5.6 3.1 5.1.2 0 .2-.7.4-.9.3 0 .6.6 1 .6.8-.2.5-.5.1-1-.9-1.1-.9-1.9-1.1-3.2-.2-1.1-.9-2.4-.8-3.4 0-1 1.3-1.6 2-2.2.9-.8 1.4-1.6 1.7-2.7.1-.5.2-1.2.6-1.5.4-.3.9 0 1.3-.1.9-.1 1.9-.6 2-1.6.1-1.1-.5-1.9-.5-2.8 0-.8.4-.8-.3-1.4-.4-.3-1-.4-.8-1 .1-.5.8-1.3 1.2-1.6.4-.4.7-.8 1.1-1.2.9-1 2-.5 3.1-1.9-.7-.2-1.8 1.4-2.2.5-.2-.5.7-2.5 1.1-3 .5-1 1.4-1.9 0-3.8-.2.9.1 1.1-.1 2.1-.2 1.1-.7 2-1.4 2.9-.6 1-1.2 2-1.7 3.1-.3.5-1.2 2.6-1.9 2.7-1 .1 0-2.3.2-2.9.4-1.1.8-2.1 1-3.2.1-.9.5-2.3 0-3.2-.5-1-2-1.1-2.5 0-.8 1.8 1 4.7-.2 6.3-1 1.4-1-1-.9-1.6.2-1.1-.5-1.7-.7-2.9-.1-.6-.1-1.3-.2-1.9-.4.4-.5 1-.4 1.4-.5.1-.7-.6-1.1-.8-.5-.2-1.1 0-1.4.3-.9.7-.4 2.1-.1 3 .4 1.1.7 2.1 1.1 3.2.5 1.1 1.2 2.1 1.6 3.2.3 1-.6 2.2-1.6 2.3"></path>
-                </svg>
-            </a>
+            {/* Jackalope Player Count - Top Left */}
+            <PlayerCountDisplay playerType="jackalope" position="left" />
 
-            {/* Bonsai Logo Link */}
-            <a
-                href="https://bonsai.so"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                    position: 'fixed',
-                    top: '15px',
-                    right: '15px',
-                    zIndex: 1000,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    transition: 'transform 0.2s ease',
-                }}
-                onMouseOver={(e) => {
-                    e.currentTarget.style.transform = 'scale(1.05)';
-                }}
-                onMouseOut={(e) => {
-                    e.currentTarget.style.transform = 'scale(1)';
-                }}
-            >
-                <svg className="h-8 w-8 mr-3" viewBox="0 0 731 731.2" style={{ fill: 'white', opacity: 0.5, height: '28px' }}>
-                    <path d="M647.1 172.7L396 27.7a56.727 56.727 0 0 0-56.9 0l-251 144.9c-17.6 10.2-28.4 28.9-28.4 49.3v289.9c0 20.3 10.8 39.1 28.4 49.3l251 144.9c17.6 10.2 39.3 10.2 56.9 0l251-144.9c17.6-10.2 28.4-28.9 28.4-49.3V222c.1-20.4-10.7-39.2-28.3-49.3zM542.6 447.1c-14.9 16.8-41.5 14.9-52.4 4.3-4.9 2.8-17.9 9.7-31.2 8.3l-96.7 55.5c-1.3.8-2.9 1.2-4.4 1.2h-48.6c-2.5 0-3.4-3.3-1.2-4.6l107.7-62.7c9.7-5.7 9.7-19.7 0-25.4l-41-23.9-32.1-4.7s-98.3 28.5-133.9 12.2c-35.5-16.3-45 0-45 0s-15 13-37.5 3.1c-11.4-15.9 0-25.6 15.2-20.4-1.8-10.1 7.4-13 14.9-20.5-9.1-1.4-7.5-14.2-10.3-22.9-10.4-12.5-1.4-29.1 10.3-29.1-5.7-29.8 11.9-31.6 30-27.7 2.2-28.4 22.6-42.9 52.6-29.9-4.2-41.7 47.8-26 47.8-26s-16-15.5-2.8-26c13.1-10.5 18 0 18 0 16.6-19.5 49.5-4.7 51.2 8.7 1.3-4.6 20.6-4.2 20.6-4.2 36.5-28.2 79.4-4.5 75.3 17.2 63.3-24.8 54.8 56.4 54.8 56.4 14.8-13.5 13.8.6 27.8 8.7 34.9 10.4 19.4 23.5 19.4 23.5 37.7-7.1 59.3 19.9 44 41.1 18.4 11.9 17.9 25 10.5 33.6 6.6 7.2 7.9 19.3-2.8 32.5 4 29.4-28.1 33.4-60.2 21.7z"></path>
-                </svg>
-            </a>
+            {/* Merc Player Count - Top Right */}
+            <PlayerCountDisplay playerType="merc" position="right" />
 
             {/* Add IntroScreen */}
             <IntroScreenManager
@@ -4335,6 +4568,13 @@ export function App() {
                 playerType={playerCharacterInfo.type}
                 onPlayAgain={handlePlayAgain}
             />
+
+            <RespawnButton connectionManager={connectionManager} />
+
+            {/* Merc flashblind overlay from rainbow egg flashbang */}
+            {playerCharacterInfo.type === 'merc' && mercFlashblindUntil > Date.now() && (
+                <MercFlashblindOverlay until={mercFlashblindUntil} />
+            )}
         </>
     );
 }

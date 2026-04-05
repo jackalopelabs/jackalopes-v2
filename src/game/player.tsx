@@ -3,6 +3,13 @@ import { KeyboardControls, PerspectiveCamera, PointerLockControls, useKeyboardCo
 import { useFrame, useThree } from '@react-three/fiber'
 import { CapsuleCollider, RigidBody, RigidBodyProps, useBeforePhysicsStep, useRapier } from '@react-three/rapier'
 import { useEffect, useRef, useState, useMemo, forwardRef, useImperativeHandle } from 'react'
+
+declare global {
+    interface Window {
+        __localPlayerPosition?: THREE.Vector3
+        __localPlayerInteract?: boolean
+    }
+}
 import { useGamepad } from '../common/hooks/use-gamepad'
 import { useControls } from 'leva'
 import * as THREE from 'three'
@@ -32,14 +39,12 @@ const autoStepMaxHeight = 2
 const autoStepMinWidth = 0.05
 const accelerationTimeAirborne = 0.5
 const accelerationTimeGrounded = 0.15
-const timeToJumpApex = 2
-const maxJumpHeight = 0.5
-const minJumpHeight = 0.2
 const velocityXZSmoothing = 0.25
 const velocityXZMin = 0.001
-const jumpGravity = -(2 * maxJumpHeight) / Math.pow(timeToJumpApex, 3)
-const maxJumpVelocity = Math.abs(jumpGravity) * timeToJumpApex
-const minJumpVelocity = Math.sqrt(2 * Math.abs(jumpGravity) * minJumpHeight)
+// Simple fixed values for stable jumping
+const jumpGravity = -0.025
+const maxJumpVelocity = 0.18
+const minJumpVelocity = 0.10
 
 const up = new THREE.Vector3(0, 1, 0)
 
@@ -462,16 +467,19 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
         const moveBackward = backward || (gamepadState.leftStick.y > 0)
         const moveLeft = left || (gamepadState.leftStick.x < 0)
         const moveRight = right || (gamepadState.leftStick.x > 0)
-        const isJumping = jump || gamepadState.buttons.jump
-        const isSprinting = sprint || gamepadState.buttons.leftStickPress
+        // Edge-triggered jump (only fires on first frame of button press)
+        const jumpPressed = jump || gamepadState.buttons.jump
+        // Level-triggered jump held (true while button is held, for variable-height jumps)
+        const isJumpHeld = jump || gamepadState.buttons.jumpHeld
+        const isSprinting = sprint || gamepadState.buttons.sprint
 
         // Store movement intent for prediction/reconciliation
         movementIntent.current = {
             forward: moveForward,
             backward: moveBackward,
-            left: moveLeft, 
+            left: moveLeft,
             right: moveRight,
-            jump: isJumping,
+            jump: isJumpHeld,
             sprint: isSprinting
         }
 
@@ -507,13 +515,13 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
 
         // x and z movement - align calculation with Jackalope
         _frontVector.set(0, 0, Number(moveForward) - Number(moveBackward))
-        _sideVector.set(Number(moveRight) - Number(moveLeft), 0, 0)
+        _sideVector.set(Number(moveLeft) - Number(moveRight), 0, 0)
 
         const cameraWorldDirection = camera.getWorldDirection(_cameraWorldDirection)
         const cameraYaw = Math.atan2(cameraWorldDirection.x, cameraWorldDirection.z)
 
-        // Modified to match Jackalope implementation
-        _direction.subVectors(_frontVector, _sideVector).normalize().multiplyScalar(speed)
+        // Combine front/back and strafe vectors
+        _direction.addVectors(_frontVector, _sideVector).normalize().multiplyScalar(speed)
         _direction.applyAxisAngle(up, cameraYaw)
 
         const horizontalVelocitySmoothing = velocityXZSmoothing * (grounded ? accelerationTimeGrounded : accelerationTimeAirborne)
@@ -531,30 +539,32 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
         }
 
         // jumping and gravity
-        if (isJumping && grounded) {
+        // Only trigger a new jump on the edge (first frame of press) while grounded
+        if (jumpPressed && grounded) {
             jumping.current = true
             holdingJump.current = true
             jumpTime.current = clock.elapsedTime
             jumpVelocity.current = maxJumpVelocity * (jumpForce / 0.5) // Scale jump velocity based on jumpForce
         }
 
-        if (!isJumping && grounded) {
+        if (!isJumpHeld && grounded) {
             jumping.current = false
         }
 
-        if (jumping.current && holdingJump.current && !isJumping) {
+        // Variable-height jump: releasing the button early cuts the jump short
+        if (jumping.current && holdingJump.current && !isJumpHeld) {
             if (jumpVelocity.current > minJumpVelocity) {
                 jumpVelocity.current = minJumpVelocity
             }
         }
 
-        if (!isJumping && grounded) {
+        if (!isJumpHeld && grounded) {
             jumpVelocity.current = 0
         } else {
             jumpVelocity.current += jumpGravity * 0.116
         }
 
-        holdingJump.current = isJumping
+        holdingJump.current = isJumpHeld
 
         // compute movement direction
         const movementDirection = {
@@ -570,6 +580,10 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
         const newPosition = _characterTranslation.copy(translation as THREE.Vector3)
         const movement = characterController.current.computedMovement()
         newPosition.add(movement)
+
+        // No direct player-vs-player push here.
+        // Player colliders are sensors, so hard blocking is gone.
+        // Keeping this disabled avoids the invisible force-field feel around the merc.
 
         // If we need to reconcile with server position
         if (pendingReconciliation.current) {
@@ -602,7 +616,7 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
 
         const { forward, backward, left, right } = getKeyboardControls() as KeyControls
         const isMoving = forward || backward || left || right
-        const isSprinting = getKeyboardControls().sprint || gamepadState.buttons.leftStickPress
+        const isSprinting = getKeyboardControls().sprint || gamepadState.buttons.sprint || gamepadState.buttons.leftStickPress
 
         // Calculate velocity magnitude for better animation state detection
         const velocityMagnitude = Math.sqrt(
@@ -642,9 +656,9 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
         const cameraPosition = _cameraPosition.set(translation.x, translation.y + 2.42, translation.z)
         const cameraEuler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ')
         
-        // Different sensitivities for horizontal and vertical aiming
-        const CAMERA_SENSITIVITY_X = 0.04
-        const CAMERA_SENSITIVITY_Y = 0.03
+        // Different sensitivities for horizontal and vertical aiming (~20% increase)
+        const CAMERA_SENSITIVITY_X = 0.048
+        const CAMERA_SENSITIVITY_Y = 0.036
         
         // Apply gamepad right stick for camera rotation
         if (gamepadState.connected && (Math.abs(gamepadState.rightStick.x) > 0 || Math.abs(gamepadState.rightStick.y) > 0)) {
@@ -684,6 +698,15 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
             }
         }
 
+        const position = characterRigidBody.translation();
+        if (position) {
+            window.__localPlayerPosition = new THREE.Vector3(position.x, position.y, position.z);
+        }
+
+        const keyboardState = getKeyboardControls() as KeyControls;
+        const interactPressed = !!keyboardState.interact || !!gamepadState?.buttons?.interact;
+        window.__localPlayerInteract = interactPressed;
+
         // Send position to multiplayer system if connected
         if (connectionManager && connectionManager.isReadyToSend() &&
             (Date.now() - lastStateTime.current > 16)) { // 60 updates per second
@@ -706,7 +729,9 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
                 sequence: Date.now(),
                 playerType: playerType,
                 flashlightOn: flashlightOn,
-                cameraPitch: cameraPitch
+                cameraPitch: cameraPitch,
+                isWalking: isWalking,
+                isRunning: isRunning
             });
         }
 
@@ -908,7 +933,7 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
     const spotlightTargetRef = useRef<THREE.Object3D>(new THREE.Object3D());
     
     // State to toggle flashlight
-    const [flashlightOn, setFlashlightOn] = useState(true);
+    const [flashlightOn, setFlashlightOn] = useState(false);
     
     // Make flashlight state accessible globally
     useEffect(() => {
@@ -917,26 +942,57 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
             window.jackalopesGame = {};
         }
         
+        // Initialize collected state if missing
+        if (window.jackalopesGame.flashlightCollected === undefined) {
+            window.jackalopesGame.flashlightCollected = false;
+        }
+
         // Add flashlight state to window for global access
         window.jackalopesGame.flashlightOn = flashlightOn;
     }, [flashlightOn]);
     
-    // Toggle flashlight with F key
+    useEffect(() => {
+        const handleCollected = () => {
+            setFlashlightOn(true);
+            if (!window.jackalopesGame) window.jackalopesGame = {};
+            window.jackalopesGame.flashlightCollected = true;
+        };
+
+        const handleReset = () => {
+            setFlashlightOn(false);
+        };
+
+        window.addEventListener('flashlightCollected', handleCollected);
+        window.addEventListener('jackalopesRoundReset', handleReset);
+        return () => {
+            window.removeEventListener('flashlightCollected', handleCollected);
+            window.removeEventListener('jackalopesRoundReset', handleReset);
+        };
+    }, []);
+
+    // Toggle flashlight with F key, but only after pickup
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'f' || e.key === 'F') {
-                setFlashlightOn(prev => !prev);
-                
-                // Dispatch event to update flashlight UI elsewhere
-                window.dispatchEvent(new CustomEvent('flashlightToggled', { 
-                    detail: { isOn: !flashlightOn } 
-                }));
+            if (e.key !== 'f' && e.key !== 'F') return;
+
+            const hasFlashlight = !!window.jackalopesGame?.flashlightCollected;
+            if (!hasFlashlight) {
+                window.dispatchEvent(new CustomEvent('flashlightToggleBlocked'));
+                return;
             }
+
+            setFlashlightOn(prev => {
+                const next = !prev;
+                window.dispatchEvent(new CustomEvent('flashlightToggled', { 
+                    detail: { isOn: next } 
+                }));
+                return next;
+            });
         };
         
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [flashlightOn]);
+    }, []);
     
     // Update spotlight position to follow camera
     useFrame(() => {
@@ -988,7 +1044,7 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
                         enabledRotations={[false, false, false]}
                     >
                         <object3D name="player" />
-                        <CapsuleCollider args={[1, 0.5]} />
+                        <CapsuleCollider args={[0.85, 0.35]} sensor />
                     </RigidBody>
                 </Component>
             </Entity>
@@ -1127,6 +1183,7 @@ type KeyControls = {
     right: boolean
     sprint: boolean
     jump: boolean
+    interact: boolean
 }
 
 const controls = [
@@ -1136,6 +1193,7 @@ const controls = [
     { name: 'right', keys: ['ArrowRight', 'd', 'D'] },
     { name: 'jump', keys: ['Space'] },
     { name: 'sprint', keys: ['Shift'] },
+    { name: 'interact', keys: ['KeyF', 'f', 'F'] },
 ]
 
 type PlayerControlsProps = {
