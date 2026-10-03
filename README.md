@@ -29,6 +29,8 @@ A winding waterslide starts in the northern upper chamber at approximately (-5, 
 
 Beyond the lake, the back-left corner of the dry grotto is the start of Everly's room: a cozy pink bed with a heart cushion, star duvet, soft oval rug, and warm bedside lamp. The bed and table have solid collisions, follow the cave floor, and leave the route back to the water open.
 
+Daddy's bed sits in the opposite back-right corner, with a dark walnut frame, navy upholstered headboard and pillows, teal quilt, forest-green throw, rectangular rug, and warm bedside lamp. Its solid bed and nightstand fit inside the angled cave wall and keep the middle of the grotto open.
+
 Hunt retains its original central scoring circle. Cave geometry is a runtime Adventure overlay: it opens only the central four terrain cells, restores their surface around the entrance, and leaves the shared editor document unchanged. Existing surface swimming and pickups remain in place. Underground water is a bounded Adventure-only volume, separate from the terrain editor water level. The same keyboard, gamepad, and contextual touch swimming controls work in the lake.
 
 ## Features

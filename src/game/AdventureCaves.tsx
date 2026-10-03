@@ -7,6 +7,7 @@ import { caveCeilingAt, caveFloorAt, createCaveGeometries } from './adventure-ca
 import { CaveKoi } from './CaveKoi'
 import { CaveWaterslide } from './CaveWaterslide'
 import { EverlyCaveRoom } from './EverlyCaveRoom'
+import { DaddyCaveRoom } from './DaddyCaveRoom'
 import { loadTerrainLevel } from './terrain/level-document'
 
 type Placement = { at: [number, number, number]; scale: [number, number, number]; turn?: number }
@@ -195,7 +196,7 @@ export function AdventureCaves({ surfaceMaterial }: { surfaceMaterial?: THREE.Ma
       [-10, -42], [10, -45], [-43, -35], [-41, -44], [42, -35], [43, -44],
       [-14, -64], [10, -66], [-7, -85], [7, -99],
       [-45, -116], [45, -123], [-42, -132], [34, -142],
-      [-8, -154], [8, -164], [-22, -180], [18, -183],
+      [-8, -154], [8, -164], [-22, -180], [21, -181],
     ]
     rockMargins.forEach(([x, z], index) => {
       const ground = caveFloorAt(level, x, z)
@@ -251,6 +252,7 @@ export function AdventureCaves({ surfaceMaterial }: { surfaceMaterial?: THREE.Ma
     <CaveWaterslide />
     <CaveKoi waterLevel={cave.waterLevel} />
     <EverlyCaveRoom level={level} />
+    <DaddyCaveRoom level={level} />
 
     <mesh name="cave-lake-water" geometry={cave.water} material={waterMaterial} dispose={null}
       renderOrder={4} userData={{ holographicSkip: true }} raycast={() => {}} />
