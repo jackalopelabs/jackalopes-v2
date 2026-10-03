@@ -297,6 +297,12 @@ npm run build
 npm run dev
 ```
 
+The Pod's currently running multiplayer server is versioned separately in
+[jackalopelabs/jackalopes-server](https://github.com/jackalopelabs/jackalopes-server).
+Its `server.js` differs from the copy bundled in this repository. Use the separate
+repository when working on the running server. The client currently connects to
+the BonsaiPod's WebSocket endpoint; `SERVER_PORT` configures a local server's port.
+
 The tests include a snapshot of the saved Adventure Valley terrain at
 `tests/fixtures/adventure-valley.json`; they do not require the Pod's live
 `level-data/` directory. The fixture is a source-controlled snapshot, and

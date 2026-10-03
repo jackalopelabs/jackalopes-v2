@@ -18,7 +18,7 @@ const {
   createTerrainLevel, normalizeTerrainLevel, terrainVertexIndex,
 } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
 
-const savedPath = new URL('../level-data/adventure-valley.json', import.meta.url)
+const savedPath = new URL('./fixtures/adventure-valley.json', import.meta.url)
 const savedBytes = readFileSync(savedPath, 'utf8')
 const savedLevel = () => normalizeTerrainLevel(JSON.parse(savedBytes))
 

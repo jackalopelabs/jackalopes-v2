@@ -1,7 +1,7 @@
 // Run with: node --test tests/golden-mushroom.test.mjs
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import * as THREE from 'three'
@@ -49,10 +49,8 @@ function assertGrounded(level, position) {
     'stem rests 6cm above gameplay terrain, including its 2cm terrain offset')
 }
 
-const savedPath = new URL('../level-data/adventure-valley.json', import.meta.url)
-test('actual saved Adventure Valley places the mushroom on its sculpted terrain without changing the document', {
-  skip: !existsSync(savedPath) && 'No local shared terrain document in this checkout',
-}, () => {
+const savedPath = new URL('./fixtures/adventure-valley.json', import.meta.url)
+test('actual saved Adventure Valley places the mushroom on its sculpted terrain without changing the document', () => {
   const saved = readFileSync(savedPath, 'utf8')
   const level = normalizeTerrainLevel(JSON.parse(saved))
   const snapshot = JSON.stringify(level)
