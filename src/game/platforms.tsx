@@ -3,8 +3,19 @@ import * as THREE from 'three'
 import { useTexture } from '@react-three/drei'
 import { SimpleTree } from './SimpleTree'
 import { TreeLoader } from './TreeLoader'
-import { useRef, useMemo } from 'react'
+import { useRef, useMemo, useEffect } from 'react'
+import { useFrame } from '@react-three/fiber'
 import { MountainRange } from './Mountain'
+import {
+    loadTerrainLevel,
+    sampleBaseTerrainHeight,
+    TERRAIN_SEGMENTS,
+    TERRAIN_SIZE,
+    terrainVertexIndex,
+} from './terrain/level-document'
+import { AdventureCaves } from './AdventureCaves'
+import { cutCaveMouth } from './adventure-caves'
+import { WaterSurface } from './terrain/WaterSurface'
 
 type BoxDimensions = [width: number, height: number, depth: number]
 
@@ -182,177 +193,302 @@ const createWallSegments = () => {
     return segments;
 };
 
-export function Platforms() {
+export function Platforms({ holographicVision = false, adventureStyle = false }: {
+    holographicVision?: boolean
+    adventureStyle?: boolean
+}) {
     // Platform colors
-    const platformColor = new THREE.Color('#757575');
+    const platformColor = new THREE.Color(adventureStyle ? '#526777' : '#757575');
     const outsideFloorColor = new THREE.Color('#3A5F3A'); // Green-grey for outside floor
     
     // Define map dimensions
     const mapSize = 60; // Size of the inner area
+    const level = useMemo(() => loadTerrainLevel(), []);
     
     // Define outside floor dimensions - increased for more terrain
-    const outsideFloorSize = 800; // Larger outdoor area (increased from 600)
+    const outsideFloorSize = TERRAIN_SIZE; // Shared with the level editor and terrain document
     const outsideFloorThickness = 1;
-    const outsideFloorY = -0.5; // Slightly lower than the interior
+    const outsideFloorY = -0.02; // Keep the terrain visually flush with the main floor without obvious under-floor gap
     
     // Parameters for low poly terrain
-    const terrainSegments = 70; // Number of segments in the terrain grid (increased from 50)
+    const terrainSegments = TERRAIN_SEGMENTS; // Shared with the level editor and terrain document
     const terrainMaxHeight = 12; // Maximum height of terrain features (increased from 6)
     const terrainNoiseScale = 0.015; // Scale of the noise function (adjusted for larger area)
     
-    // Create a low poly terrain with hills and valleys
+    // Terrain zone boundaries
+    const forestPerimeter = 80;      // Where trees end
+    const digitalDesertStart = 100;  // Start of flat desert area
+    const desertRimStart = 200;      // Where desert starts sloping UP to the rim
+    const rimPeak = 280;             // The peak of the rim/ridge surrounding the map
+    const rimHeight = 45;            // How high the rim rises above the desert
+    const valleyBottom = 380;        // Where valley reaches its lowest point
+    const valleyDepth = 100;         // How deep the valley goes below the rim peak
+
+    // Create a low poly terrain with the Digital Desert, Rim, and Great Valley
     const terrainGeometry = useMemo(() => {
         const geometry = new THREE.PlaneGeometry(
-            outsideFloorSize, 
-            outsideFloorSize, 
-            terrainSegments, 
+            outsideFloorSize,
+            outsideFloorSize,
+            terrainSegments,
             terrainSegments
         );
-        
-        // Add some hills and valleys with a simple noise function
+
+        // PlaneGeometry is in XY plane. When rotated -PI/2 on X:
+        // - local X -> world X
+        // - local Y -> world -Z
+        // - local Z -> world Y (height)
         const positions = geometry.attributes.position.array;
         for (let i = 0; i < positions.length; i += 3) {
             const x = positions[i];
-            const z = positions[i + 2];
-            
-            // Skip vertices near the center (keep playable area flat)
-            const distFromCenter = Math.sqrt(x * x + z * z);
-            if (distFromCenter < mapSize) {
-                continue;
-            }
-            
-            // Apply height based on simplex-like noise (using sine functions for simplicity)
-            const nx = x * terrainNoiseScale;
-            const nz = z * terrainNoiseScale;
-            
-            // Create several layers of noise for more interesting terrain
-            let height = 0;
-            
-            // Primary noise layer (large features)
-            height += Math.sin(nx) * Math.cos(nz) * 0.6;
-            
-            // Secondary noise layer (medium features)
-            height += Math.sin(nx * 2.1) * Math.cos(nz * 1.7) * 0.3;
-            
-            // Tertiary noise layer (small details)
-            height += Math.sin(nx * 4.2) * Math.cos(nz * 3.1) * 0.15;
-            
-            // Quaternary noise layer (micro details)
-            height += Math.sin(nx * 8.3) * Math.cos(nz * 7.9) * 0.07;
-            
-            // Create ridge-like features along certain axes
-            const ridgeX = Math.sin(nx * 0.8) * 0.2;
-            const ridgeZ = Math.cos(nz * 0.8) * 0.2;
-            height += Math.max(ridgeX, ridgeZ);
-            
-            // Apply a distance-based falloff to make terrain more pronounced further from center
-            // Make this more dramatic with a steeper curve
-            const falloffStart = mapSize;
-            const falloffEnd = 300;
-            let falloff = 0;
-            
-            if (distFromCenter > falloffStart) {
-                // Create a more interesting falloff curve
-                // First rapidly increase, then level off in the mid-distance, then increase again
-                const normalizedDist = (distFromCenter - falloffStart) / (falloffEnd - falloffStart);
-                falloff = Math.pow(normalizedDist, 0.7) * (1.0 + 0.2 * Math.sin(normalizedDist * Math.PI * 2));
-                
-                // Add occasional plateau areas
-                if (Math.abs(Math.sin(nx * 0.5) * Math.cos(nz * 0.5)) < 0.2) {
-                    height *= 0.3; // Flatten these areas
-                }
-                
-                // Add occasional steep areas
-                if (Math.abs(Math.sin(nx * 0.3) * Math.cos(nz * 0.4)) > 0.8) {
-                    height *= 1.5; // Make these areas steeper
-                }
-            }
-            
-            // Apply height to the vertex with improved falloff
-            positions[i + 1] = height * terrainMaxHeight * Math.min(1.0, falloff);
+            const y = positions[i + 1];
+            const worldZ = -y;
+            const vertexIndex = terrainVertexIndex(i / 3 % (terrainSegments + 1), Math.floor((i / 3) / (terrainSegments + 1)));
+            positions[i + 2] = sampleBaseTerrainHeight(x, worldZ) + level.heightOffsets[vertexIndex];
         }
-        
-        // Update normals
+
+        if (adventureStyle) cutCaveMouth(geometry);
         geometry.computeVertexNormals();
         return geometry;
-    }, [outsideFloorSize, terrainSegments, terrainMaxHeight, terrainNoiseScale, mapSize]);
+    }, [outsideFloorSize, terrainSegments, terrainNoiseScale, mapSize, forestPerimeter, digitalDesertStart, desertRimStart, rimPeak, rimHeight, valleyBottom, valleyDepth, adventureStyle]);
     
-    // Create a grid shader material with fade-out effect
+    // Create a grid shader material with zone-based coloring
     const floorGridMaterial = useMemo(() => new THREE.ShaderMaterial({
+        extensions: { derivatives: true },
         uniforms: {
-            color1: { value: new THREE.Color('#324D32') }, // Darker green
-            color2: { value: new THREE.Color('#3E5F3E') }, // Lighter green
+            adventureStyle: { value: adventureStyle ? 1 : 0 },
+            sanctuaryForest: { value: new THREE.Color('#355451') },
+            sanctuaryDesert: { value: new THREE.Color('#78664f') },
+            sanctuaryRim: { value: new THREE.Color('#526373') },
+            sanctuaryValley: { value: new THREE.Color('#474f6a') },
+            sanctuaryGrid: { value: new THREE.Color('#699d95') },
+            sanctuaryCopper: { value: new THREE.Color('#b69a70') },
+            sanctuaryFog: { value: new THREE.Color('#142d39') },
+            // Keep original zone colors for Hunt and golden-mushroom vision.
+            // Forest zone colors (green)
+            forestColor1: { value: new THREE.Color('#324D32') },
+            forestColor2: { value: new THREE.Color('#3E5F3E') },
+            // Desert zone colors (tan/sandy)
+            desertColor1: { value: new THREE.Color('#8B7355') },
+            desertColor2: { value: new THREE.Color('#A08060') },
+            // Rim zone colors (rocky grey/brown)
+            rimColor1: { value: new THREE.Color('#5C5040') },
+            rimColor2: { value: new THREE.Color('#6B5D4D') },
+            // Valley zone colors (reddish brown)
+            valleyColor1: { value: new THREE.Color('#6B4423') },
+            valleyColor2: { value: new THREE.Color('#8B5A2B') },
             gridSize: { value: 5.0 },
             gridLineWidth: { value: 0.1 },
-            center: { value: new THREE.Vector3(0, 0, 0) }, // Center for distance calculation
-            fadeOutStartRadius: { value: outsideFloorSize * 0.6 }, // Start fading at 60% of the size
-            fadeOutEndRadius: { value: outsideFloorSize * 0.95 }, // Fully faded near the edge (95%)
-            fogColor: { value: new THREE.Color('#030812') } // Color to fade towards (similar to fog)
+            center: { value: new THREE.Vector3(0, 0, 0) },
+            visionStrength: { value: 0 },
+            visionTime: { value: 0 },
+            visionOrigin: { value: new THREE.Vector3() },
+            // Zone boundaries
+            forestEnd: { value: forestPerimeter },
+            desertStart: { value: digitalDesertStart },
+            rimStart: { value: desertRimStart },
+            rimPeakDist: { value: rimPeak },
+            valleyStart: { value: rimPeak },
+            fadeOutStartRadius: { value: outsideFloorSize * 0.8 },
+            fadeOutEndRadius: { value: outsideFloorSize * 0.95 },
+            fogColor: { value: new THREE.Color('#030812') }
         },
         vertexShader: `
             varying vec2 vUv;
-            varying vec3 vWorldPosition; // Pass world position to fragment shader
+            varying vec3 vWorldPosition;
             void main() {
                 vUv = uv;
-                // Calculate world position
                 vec4 worldPosition = modelMatrix * vec4(position, 1.0);
                 vWorldPosition = worldPosition.xyz;
                 gl_Position = projectionMatrix * viewMatrix * worldPosition;
             }
         `,
         fragmentShader: `
-            uniform vec3 color1;
-            uniform vec3 color2;
+            uniform float adventureStyle;
+            uniform vec3 sanctuaryForest;
+            uniform vec3 sanctuaryDesert;
+            uniform vec3 sanctuaryRim;
+            uniform vec3 sanctuaryValley;
+            uniform vec3 sanctuaryGrid;
+            uniform vec3 sanctuaryCopper;
+            uniform vec3 sanctuaryFog;
+            uniform vec3 forestColor1;
+            uniform vec3 forestColor2;
+            uniform vec3 desertColor1;
+            uniform vec3 desertColor2;
+            uniform vec3 rimColor1;
+            uniform vec3 rimColor2;
+            uniform vec3 valleyColor1;
+            uniform vec3 valleyColor2;
             uniform float gridSize;
             uniform float gridLineWidth;
             uniform vec3 center;
+            uniform float visionStrength;
+            uniform float visionTime;
+            uniform vec3 visionOrigin;
+            uniform float forestEnd;
+            uniform float desertStart;
+            uniform float rimStart;
+            uniform float rimPeakDist;
+            uniform float valleyStart;
             uniform float fadeOutStartRadius;
             uniform float fadeOutEndRadius;
             uniform vec3 fogColor;
             varying vec2 vUv;
-            varying vec3 vWorldPosition; // Receive world position
+            varying vec3 vWorldPosition;
+
+            // World-sized lines with a one-pixel antialiasing footprint. The
+            // coverage correction prevents distant subpixel lines becoming a solid wash.
+            float surveyGrid(vec2 worldXZ, float spacing, float width) {
+                vec2 cell = worldXZ / spacing;
+                vec2 footprint = max(fwidth(cell), vec2(0.00001));
+                vec2 edge = abs(fract(cell - 0.5) - 0.5);
+                vec2 halfWidth = vec2(width / spacing);
+                vec2 aaWidth = max(footprint * 0.7, halfWidth);
+                vec2 coverage = (1.0 - smoothstep(halfWidth, halfWidth + aaWidth, edge))
+                    * min(vec2(1.0), (halfWidth * 2.0) / footprint);
+                return max(coverage.x, coverage.y);
+            }
 
             void main() {
-                vec2 scaledUv = vUv * ${outsideFloorSize.toFixed(1)}; // Use updated size
+                vec2 scaledUv = vUv * ${outsideFloorSize.toFixed(1)};
                 vec2 grid = abs(fract(scaledUv / gridSize - 0.5) - 0.5) / fwidth(scaledUv / gridSize);
                 float line = min(grid.x, grid.y);
-                
+
                 float gridMask = 1.0 - min(line, 1.0);
                 gridMask = smoothstep(0.0, gridLineWidth, gridMask);
-                
+
+                // Calculate distance from center
+                float dist = length(vWorldPosition.xz - center.xz);
+
+                // Determine zone colors based on distance
+                vec3 color1, color2;
+
+                if (dist < forestEnd) {
+                    // Forest zone
+                    color1 = forestColor1;
+                    color2 = forestColor2;
+                } else if (dist < desertStart) {
+                    // Transition from forest to desert
+                    float t = smoothstep(forestEnd, desertStart, dist);
+                    color1 = mix(forestColor1, desertColor1, t);
+                    color2 = mix(forestColor2, desertColor2, t);
+                } else if (dist < rimStart) {
+                    // Flat desert zone (Digital Desert)
+                    color1 = desertColor1;
+                    color2 = desertColor2;
+                } else if (dist < rimPeakDist) {
+                    // Slope up to rim - transition to rocky colors
+                    float t = smoothstep(rimStart, rimPeakDist, dist);
+                    color1 = mix(desertColor1, rimColor1, t);
+                    color2 = mix(desertColor2, rimColor2, t);
+                } else if (dist < valleyStart + 60.0) {
+                    // Rim peak and descent - transition to valley colors
+                    float t = smoothstep(rimPeakDist, valleyStart + 60.0, dist);
+                    color1 = mix(rimColor1, valleyColor1, t);
+                    color2 = mix(rimColor2, valleyColor2, t);
+                } else {
+                    // Valley zone (Great Valley)
+                    color1 = valleyColor1;
+                    color2 = valleyColor2;
+                }
+
                 vec3 baseColor = mix(color1, color2, gridMask);
-                
-                // Add some noise/variation to the base floor
+
+                // Add noise variation
                 float noise = fract(sin(dot(floor(scaledUv), vec2(12.9898, 78.233))) * 43758.5453);
                 baseColor = mix(baseColor, baseColor * (0.9 + 0.1 * noise), 0.2);
 
-                // Calculate distance from the center in the xz plane
-                float dist = length(vWorldPosition.xz - center.xz);
-                
-                // Calculate fade factor using smoothstep
+                // The default Adventure world is a quiet topographic simulation.
+                // Its own branch leaves the original golden-vision palette and grid intact.
+                vec3 sanctuaryColor = sanctuaryForest;
+                sanctuaryColor = mix(sanctuaryColor, sanctuaryDesert, smoothstep(forestEnd, desertStart + 15.0, dist));
+                sanctuaryColor = mix(sanctuaryColor, sanctuaryRim, smoothstep(rimStart, rimPeakDist, dist));
+                sanctuaryColor = mix(sanctuaryColor, sanctuaryValley, smoothstep(rimPeakDist, valleyStart + 65.0, dist));
+
+                vec3 faceNormal = normalize(cross(dFdx(vWorldPosition), dFdy(vWorldPosition)));
+                if (faceNormal.y < 0.0) faceNormal = -faceNormal;
+                float sunward = max(dot(faceNormal, normalize(vec3(-0.45, 0.8, -0.35))), 0.0);
+                float skyward = clamp(faceNormal.y, 0.0, 1.0);
+                float slope = 1.0 - skyward;
+                float elevation = smoothstep(-25.0, 60.0, vWorldPosition.y);
+                sanctuaryColor *= 0.65 + sunward * 0.48 + skyward * 0.12;
+                sanctuaryColor = mix(sanctuaryColor, sanctuaryRim * 0.72, slope * 0.3);
+                sanctuaryColor *= 0.91 + elevation * 0.17;
+                // Broad, continuous variation avoids noisy swimming pixels on the floor.
+                sanctuaryColor *= 0.97 + 0.03 * sin(vWorldPosition.x * 0.075) * cos(vWorldPosition.z * 0.064);
+
+                float cameraDistance = distance(vWorldPosition, cameraPosition);
+                float minorGrid = surveyGrid(vWorldPosition.xz, 5.0, 0.045)
+                    * (1.0 - smoothstep(35.0, 145.0, cameraDistance));
+                float majorGrid = surveyGrid(vWorldPosition.xz, 25.0, 0.085)
+                    * (1.0 - smoothstep(105.0, 280.0, cameraDistance));
+                float desertTint = smoothstep(75.0, 130.0, dist) * (1.0 - smoothstep(200.0, 300.0, dist));
+                vec3 surveyColor = mix(sanctuaryGrid, sanctuaryCopper, desertTint);
+                sanctuaryColor = mix(sanctuaryColor, surveyColor, minorGrid * 0.35);
+                sanctuaryColor = mix(sanctuaryColor, surveyColor * 1.12, majorGrid * 0.58);
+
+                // Fine contour marks appear only on slopes, revealing sculpted relief.
+                float contourHeight = vWorldPosition.y / 5.0;
+                float contourEdge = abs(fract(contourHeight - 0.5) - 0.5);
+                float contourAA = max(fwidth(contourHeight), 0.001);
+                float contour = 1.0 - smoothstep(0.008, 0.008 + contourAA, contourEdge);
+                contour *= min(1.0, 0.024 / contourAA) * smoothstep(0.04, 0.4, slope);
+                contour *= 1.0 - smoothstep(60.0, 180.0, cameraDistance);
+                sanctuaryColor = mix(sanctuaryColor, surveyColor, contour * 0.2);
+
+                // Preserve the full legacy effect at full vision strength.
+                float sanctuaryStrength = adventureStyle * (1.0 - visionStrength);
+                // Composite the linear Adventure palette at output, after legacy vision math.
+
+                // The golden mushroom reveals the existing grid, without
+                // replacing terrain, its sculpted heights, or its zone colors.
+                float visionDistance = distance(vWorldPosition, visionOrigin);
+                float visionRange = 1.0 - smoothstep(55.0, 150.0, visionDistance);
+                float hueWave = 0.5 + 0.5 * sin(visionDistance * 0.075 - visionTime * 0.55);
+                vec3 cyan = vec3(0.10, 1.15, 1.30);
+                vec3 violet = vec3(0.85, 0.28, 1.30);
+                vec3 gold = vec3(1.30, 0.88, 0.25);
+                vec3 hologramColor = mix(cyan, violet, hueWave);
+                float goldWave = pow(0.5 + 0.5 * sin(vWorldPosition.x * 0.025 + vWorldPosition.z * 0.018 + visionTime * 0.30), 5.0);
+                hologramColor = mix(hologramColor, gold, goldWave * 0.65);
+                float scanPhase = fract(visionDistance / 72.0 - visionTime / 8.0);
+                float scanWave = 1.0 - smoothstep(0.0, 0.10, abs(scanPhase - 0.5));
+                float reveal = visionStrength * visionRange;
+                baseColor = mix(baseColor, baseColor * 0.85 + hologramColor * 0.065, reveal);
+                baseColor = mix(baseColor, hologramColor * (0.65 + scanWave * 0.35), gridMask * reveal);
+                baseColor += hologramColor * scanWave * reveal * 0.07;
+
+                // Edge fade
                 float fadeFactor = smoothstep(fadeOutStartRadius, fadeOutEndRadius, dist);
-                
-                // Mix base color with fog color based on fade factor
                 vec3 finalColor = mix(baseColor, fogColor, fadeFactor);
-                
-                gl_FragColor = vec4(finalColor, 1.0); // Output final faded color
+
+                // Distance is relative to the camera, never to the center of the map.
+                // Match the Adventure lighting rig's atmospheric color and range.
+                float depthFog = smoothstep(70.0, 340.0, cameraDistance);
+                vec3 sanctuaryOutput = linearToOutputTexel(vec4(mix(sanctuaryColor, sanctuaryFog, depthFog), 1.0)).rgb;
+                finalColor = mix(finalColor, sanctuaryOutput, sanctuaryStrength);
+                gl_FragColor = vec4(finalColor, 1.0);
             }
         `,
         side: THREE.DoubleSide
-    }), [outsideFloorSize]); // Add outsideFloorSize dependency
+    }), [outsideFloorSize, forestPerimeter, digitalDesertStart, desertRimStart, rimPeak, adventureStyle]);
+
+    useEffect(() => () => floorGridMaterial.dispose(), [floorGridMaterial]);
+
+    useFrame(({ clock }, delta) => {
+        const uniforms = floorGridMaterial.uniforms;
+        uniforms.visionTime.value = clock.elapsedTime;
+        const target = holographicVision ? 1 : 0;
+        const strength = THREE.MathUtils.damp(uniforms.visionStrength.value, target, 3, delta);
+        uniforms.visionStrength.value = Math.abs(strength - target) < 0.001 ? target : strength;
+        if (window.__localPlayerPosition) uniforms.visionOrigin.value.copy(window.__localPlayerPosition);
+    });
     
     return (
-        <group>
-            {/* Main platform boxes with trees */}
+        <group name="adventure-scenery" userData={{ holographicScenery: true }}>
+            {/* Decorative tree pedestals only - no collision so they don't create invisible block zones */}
             {boxes.map(({ position, size }, index) => (
-                <RigidBody 
-                    key={index}
-                    type="fixed" 
-                    position={position}
-                    colliders="cuboid"
-                    friction={0.1}
-                    restitution={0}
-                >
+                <group key={index} position={position}>
                     <mesh castShadow receiveShadow>
                         <boxGeometry args={size} />
                         <meshStandardMaterial 
@@ -367,15 +503,18 @@ export function Platforms() {
                     
                     {/* Add a tree on top of each block */}
                     <TreeLoader 
+                        adventureStyle={adventureStyle}
                         position={[0, size[1] / 2, 0]}
+                        worldPosition={[position[0], position[1] + size[1] / 2, position[2]]}
                         scale={1.5}
                         treeType="tree"  // Only use actual trees on blocks
                     />
-                </RigidBody>
+                </group>
             ))}
             
-            {/* Black respawn circle in the center of the map */}
-            <RigidBody
+            {/* Hunt keeps its scoring circle; Adventure has a walkable cave mouth. */}
+            {adventureStyle && <AdventureCaves surfaceMaterial={floorGridMaterial} />}
+            {!adventureStyle && <RigidBody
                 type="fixed"
                 position={[0, 0.5, 0]}
                 colliders="hull"
@@ -386,28 +525,32 @@ export function Platforms() {
                 <mesh castShadow receiveShadow>
                     <cylinderGeometry args={[5, 5, 0.2, 32]} />
                     <meshStandardMaterial
-                        color="#000000"
+                        color={adventureStyle ? '#172c35' : '#000000'}
                         side={THREE.DoubleSide}
                         roughness={0.9}
                         metalness={0.1}
-                        emissive="#000000"
-                        emissiveIntensity={0.5}
+                        emissive={adventureStyle ? '#315e69' : '#000000'}
+                        emissiveIntensity={adventureStyle ? 0.12 : 0.5}
                     />
                 </mesh>
-            </RigidBody>
+            </RigidBody>}
             
-            {/* Low poly terrain outside - replace the flat floor */}
+            {/* Low poly terrain outside - with valley */}
             <RigidBody
                 type="fixed"
                 position={[0, outsideFloorY, 0]}
-                colliders="hull"  // Use hull for better performance with terrain
-                friction={0.2}
+                colliders="trimesh"  // Use trimesh for concave terrain (valley)
+                friction={0.3}
                 restitution={0}
             >
                 <mesh geometry={terrainGeometry} receiveShadow rotation={[-Math.PI/2, 0, 0]}>
                     <primitive object={floorGridMaterial} attach="material" />
                 </mesh>
             </RigidBody>
+
+            {/* Painted water is intentionally visual-only. Rapier continues to
+                ground characters against the sculpted terrain beneath it. */}
+            <WaterSurface level={level} />
             
             {/* Wall segments with doorway openings */}
             {createWallSegments().map((segment, index) => (
@@ -422,7 +565,7 @@ export function Platforms() {
                     <mesh castShadow receiveShadow>
                         <boxGeometry args={segment.size} />
                         <meshStandardMaterial
-                            color={segment.color}
+                            color={adventureStyle ? (segment.color === '#444444' ? '#354d5a' : '#657681') : segment.color}
                             side={THREE.DoubleSide}
                             roughness={0.7}
                             metalness={0.2}
@@ -447,7 +590,9 @@ export function Platforms() {
                     <mesh castShadow receiveShadow>
                         <boxGeometry args={[1.5, 1.5, 1.5]} />
                         <meshStandardMaterial
-                            color="#8B5A2B" // Brown stone color
+                            color={adventureStyle ? '#a18158' : '#8B5A2B'}
+                            emissive={adventureStyle ? '#be8549' : '#000000'}
+                            emissiveIntensity={adventureStyle ? 0.1 : 0}
                             roughness={0.7}
                             metalness={0.05}
                             envMapIntensity={0.7}
@@ -457,65 +602,43 @@ export function Platforms() {
                 </RigidBody>
             ))}
             
-            {/* Terrain features - rock formations and hills */}
+            {/* Terrain features - rock formations in forest and desert areas (before valley) */}
             {[
-                // North feature
-                { position: [0, -0.5, -90], scale: 3.0, height: 10 },
-                // East feature
-                { position: [90, -0.5, 0], scale: 2.5, height: 8 },
-                // South feature
-                { position: [0, -0.5, 90], scale: 3.0, height: 10 },
-                // West feature
-                { position: [-90, -0.5, 0], scale: 2.5, height: 8 },
-                // Random smaller hills
-                { position: [45, -0.5, -45], scale: 1.8, height: 5 },
-                { position: [-45, -0.5, 45], scale: 1.8, height: 5 },
-                { position: [-45, -0.5, -45], scale: 1.8, height: 5 },
-                { position: [45, -0.5, 45], scale: 1.8, height: 5 },
-                
-                // Additional hills for expanded terrain
-                { position: [120, -0.5, -120], scale: 4.0, height: 15 },
-                { position: [-120, -0.5, 120], scale: 4.0, height: 15 },
-                { position: [-120, -0.5, -120], scale: 4.0, height: 15 },
-                { position: [120, -0.5, 120], scale: 4.0, height: 15 },
-                
-                // Mountain-like features further out
-                { position: [200, -0.5, 0], scale: 5.0, height: 20 },
-                { position: [-200, -0.5, 0], scale: 5.0, height: 20 },
-                { position: [0, -0.5, 200], scale: 5.0, height: 20 },
-                { position: [0, -0.5, -200], scale: 5.0, height: 20 },
-                
-                // Random mid-sized hills
-                { position: [150, -0.5, -80], scale: 3.2, height: 12 },
-                { position: [-150, -0.5, 80], scale: 3.2, height: 12 },
-                { position: [-80, -0.5, -150], scale: 3.2, height: 12 },
-                { position: [80, -0.5, 150], scale: 3.2, height: 12 },
-                { position: [170, -0.5, 170], scale: 3.5, height: 14 },
-                { position: [-170, -0.5, -170], scale: 3.5, height: 14 },
-                { position: [-170, -0.5, 170], scale: 3.5, height: 14 },
-                { position: [170, -0.5, -170], scale: 3.5, height: 14 },
-                
-                // Valley features
-                { position: [60, -0.5, -110], scale: 2.2, height: 7 },
-                { position: [-60, -0.5, 110], scale: 2.2, height: 7 },
-                { position: [-110, -0.5, -60], scale: 2.2, height: 7 },
-                { position: [110, -0.5, 60], scale: 2.2, height: 7 },
-                
-                // Small hill clusters
-                { position: [30, -0.5, -130], scale: 1.5, height: 4 },
-                { position: [-30, -0.5, 130], scale: 1.5, height: 4 },
-                { position: [-130, -0.5, -30], scale: 1.5, height: 4 },
-                { position: [130, -0.5, 30], scale: 1.5, height: 4 },
-                { position: [50, -0.5, -150], scale: 1.7, height: 5 },
-                { position: [-50, -0.5, 150], scale: 1.7, height: 5 },
-                { position: [-150, -0.5, -50], scale: 1.7, height: 5 },
-                { position: [150, -0.5, 50], scale: 1.7, height: 5 },
-                
-                // Distant large features
-                { position: [250, -0.5, 150], scale: 6.0, height: 25 },
-                { position: [-250, -0.5, -150], scale: 6.0, height: 25 },
-                { position: [150, -0.5, -250], scale: 6.0, height: 25 },
-                { position: [-150, -0.5, 250], scale: 6.0, height: 25 },
+                // Forest perimeter features (near the tree line)
+                { position: [0, -0.5, -90], scale: 3.0, height: 10, zone: 'forest' },
+                { position: [90, -0.5, 0], scale: 2.5, height: 8, zone: 'forest' },
+                { position: [0, -0.5, 90], scale: 3.0, height: 10, zone: 'forest' },
+                { position: [-90, -0.5, 0], scale: 2.5, height: 8, zone: 'forest' },
+
+                // Digital Desert rock formations (scattered mesas and buttes)
+                { position: [130, -0.5, 0], scale: 4.0, height: 18, zone: 'desert' },
+                { position: [-130, -0.5, 0], scale: 4.0, height: 18, zone: 'desert' },
+                { position: [0, -0.5, 130], scale: 4.0, height: 18, zone: 'desert' },
+                { position: [0, -0.5, -130], scale: 4.0, height: 18, zone: 'desert' },
+
+                // Desert corner formations
+                { position: [120, -0.5, 120], scale: 3.5, height: 15, zone: 'desert' },
+                { position: [-120, -0.5, 120], scale: 3.5, height: 15, zone: 'desert' },
+                { position: [120, -0.5, -120], scale: 3.5, height: 15, zone: 'desert' },
+                { position: [-120, -0.5, -120], scale: 3.5, height: 15, zone: 'desert' },
+
+                // Smaller desert outcrops
+                { position: [160, -0.5, 60], scale: 2.5, height: 10, zone: 'desert' },
+                { position: [-160, -0.5, -60], scale: 2.5, height: 10, zone: 'desert' },
+                { position: [60, -0.5, -160], scale: 2.5, height: 10, zone: 'desert' },
+                { position: [-60, -0.5, 160], scale: 2.5, height: 10, zone: 'desert' },
+
+                // Mesa formations near the valley edge (these will look like cliffs)
+                { position: [200, -0.5, 0], scale: 5.0, height: 25, zone: 'desert' },
+                { position: [-200, -0.5, 0], scale: 5.0, height: 25, zone: 'desert' },
+                { position: [0, -0.5, 200], scale: 5.0, height: 25, zone: 'desert' },
+                { position: [0, -0.5, -200], scale: 5.0, height: 25, zone: 'desert' },
+
+                // Diagonal edge formations
+                { position: [150, -0.5, 150], scale: 4.5, height: 22, zone: 'desert' },
+                { position: [-150, -0.5, -150], scale: 4.5, height: 22, zone: 'desert' },
+                { position: [-150, -0.5, 150], scale: 4.5, height: 22, zone: 'desert' },
+                { position: [150, -0.5, -150], scale: 4.5, height: 22, zone: 'desert' },
             ].map((feature, idx) => (
                 <RigidBody
                     key={`terrain-feature-${idx}`}
@@ -526,7 +649,13 @@ export function Platforms() {
                     <mesh castShadow receiveShadow>
                         <coneGeometry args={[feature.scale * 10, feature.height, 8]} />
                         <meshStandardMaterial
-                            color={idx % 3 === 0 ? "#3A5F3A" : idx % 3 === 1 ? "#34543A" : "#2D4A33"}
+                            color={adventureStyle
+                                ? (feature.zone === 'forest'
+                                    ? ['#405a5b', '#4b6260', '#3a5359'][idx % 3]
+                                    : ['#8c795f', '#746c61', '#a08b6c'][idx % 3])
+                                : feature.zone === 'forest'
+                                ? (idx % 3 === 0 ? "#3A5F3A" : idx % 3 === 1 ? "#34543A" : "#2D4A33")
+                                : (idx % 3 === 0 ? "#8B6914" : idx % 3 === 1 ? "#A0522D" : "#CD853F")}
                             roughness={0.8}
                             side={THREE.DoubleSide}
                         />
@@ -534,94 +663,104 @@ export function Platforms() {
                 </RigidBody>
             ))}
             
-            {/* Add more outside trees, widely distributed across the terrain */}
+            {/* Trees in forest and desert areas (before valley at 250) */}
             {[
-                // Original tree positions
+                // Forest perimeter trees (60-100 range)
                 [-25, 0, -70], [25, 0, -70], // North area
                 [-25, 0, 70], [25, 0, 70], // South area
                 [70, 0, -25], [70, 0, 25], // East area
                 [-70, 0, -25], [-70, 0, 25], // West area
-                [-100, 0, -100], [100, 0, -100], [-100, 0, 100], [100, 0, 100], // Corners
-                [-70, 0, -40], [70, 0, -40], [-70, 0, 40], [70, 0, 40], // Random positions
-                
-                // Additional trees further out in the terrain
+                [-70, 0, -40], [70, 0, -40], [-70, 0, 40], [70, 0, 40],
+
+                // Digital Desert scattered trees (100-200 range) - sparse desert vegetation
+                [-100, 0, -100], [100, 0, -100], [-100, 0, 100], [100, 0, 100],
                 [-120, 0, -80], [120, 0, -80], [-120, 0, 80], [120, 0, 80],
                 [-80, 0, -120], [80, 0, -120], [-80, 0, 120], [80, 0, 120],
                 [-150, 0, -50], [150, 0, -50], [-150, 0, 50], [150, 0, 50],
                 [-50, 0, -150], [50, 0, -150], [-50, 0, 150], [50, 0, 150],
-                [-180, 0, -180], [180, 0, -180], [-180, 0, 180], [180, 0, 180],
                 [-140, 0, -60], [140, 0, -60], [-140, 0, 60], [140, 0, 60],
                 [-60, 0, -140], [60, 0, -140], [-60, 0, 140], [60, 0, 140],
-                
-                // Extended terrain trees (200-300 range)
-                [-220, 0, -90], [220, 0, -90], [-220, 0, 90], [220, 0, 90],
-                [-90, 0, -220], [90, 0, -220], [-90, 0, 220], [90, 0, 220],
-                [-250, 0, -120], [250, 0, -120], [-250, 0, 120], [250, 0, 120],
-                [-120, 0, -250], [120, 0, -250], [-120, 0, 250], [120, 0, 250],
-                [-280, 0, -60], [280, 0, -60], [-280, 0, 60], [280, 0, 60],
-                [-60, 0, -280], [60, 0, -280], [-60, 0, 280], [60, 0, 280],
-                [-210, 0, -210], [210, 0, -210], [-210, 0, 210], [210, 0, 210],
                 [-180, 0, -70], [180, 0, -70], [-180, 0, 70], [180, 0, 70],
                 [-70, 0, -180], [70, 0, -180], [-70, 0, 180], [70, 0, 180],
-                
-                // Randomly spaced trees within 300 unit radius
-                [225, 0, 75], [-225, 0, -75], [75, 0, -225], [-75, 0, 225],
-                [240, 0, 140], [-240, 0, -140], [140, 0, -240], [-140, 0, 240],
+
+                // Desert edge trees (near valley rim, 180-220 range)
+                [-180, 0, -180], [180, 0, -180], [-180, 0, 180], [180, 0, 180],
                 [190, 0, -30], [-190, 0, 30], [30, 0, 190], [-30, 0, -190],
                 [170, 0, -110], [-170, 0, 110], [110, 0, 170], [-110, 0, -170],
-                [270, 0, 30], [-270, 0, -30], [30, 0, -270], [-30, 0, 270],
-                [200, 0, 200], [-200, 0, -200], [200, 0, -200], [-200, 0, 200],
+                [-200, 0, 0], [200, 0, 0], [0, 0, -200], [0, 0, 200],
             ].map((position, idx) => (
                 <TreeLoader
+                    adventureStyle={adventureStyle}
                     key={`outside-tree-${idx}`}
                     position={position as [number, number, number]}
-                    scale={(0.6 + Math.sin(idx * 0.1) * 0.2) * 10} // Varied scales multiplied by 10
-                    treeType="tree" // Use only trees for these positions
+                    scale={(0.6 + Math.sin(idx * 0.1) * 0.2) * 10}
+                    treeType="tree"
+                />
+            ))}
+
+            {/* Dead/sparse trees in the valley (below the rim) - at lower Y positions */}
+            {[
+                [-280, -40, -60], [280, -40, -60], [-280, -40, 60], [280, -40, 60],
+                [-60, -40, -280], [60, -40, -280], [-60, -40, 280], [60, -40, 280],
+                [-300, -50, 0], [300, -50, 0], [0, -50, -300], [0, -50, 300],
+                [-250, -35, -150], [250, -35, -150], [-250, -35, 150], [250, -35, 150],
+            ].map((position, idx) => (
+                <TreeLoader
+                    adventureStyle={adventureStyle}
+                    key={`valley-tree-${idx}`}
+                    position={position as [number, number, number]}
+                    scale={(0.4 + Math.sin(idx * 0.15) * 0.15) * 8} // Smaller, sparser valley trees
+                    treeType="tree"
                 />
             ))}
             
-            {/* Add more rocks throughout the terrain */}
+            {/* Rocks in forest and desert areas */}
             {[
-                // Original rock positions
-                [-35, 0, -60], [35, 0, -60], // North area
-                [-35, 0, 60], [35, 0, 60], // South area
-                [60, 0, -35], [60, 0, 35], // East area
-                [-60, 0, -35], [-60, 0, 35], // West area
-                [-90, 0, -90], [90, 0, -90], [-90, 0, 90], [90, 0, 90], // Corners
-                [-50, 0, -30], [50, 0, -30], [-50, 0, 30], [50, 0, 30], // Random positions
-                
-                // Additional rocks scattered through the extended terrain
+                // Forest perimeter rocks
+                [-35, 0, -60], [35, 0, -60],
+                [-35, 0, 60], [35, 0, 60],
+                [60, 0, -35], [60, 0, 35],
+                [-60, 0, -35], [-60, 0, 35],
+                [-90, 0, -90], [90, 0, -90], [-90, 0, 90], [90, 0, 90],
+                [-50, 0, -30], [50, 0, -30], [-50, 0, 30], [50, 0, 30],
+                [-80, 0, -40], [80, 0, -40], [-80, 0, 40], [80, 0, 40],
+                [-40, 0, -80], [40, 0, -80], [-40, 0, 80], [40, 0, 80],
+
+                // Desert rocks
                 [-110, 0, -45], [110, 0, -45], [-110, 0, 45], [110, 0, 45],
                 [-45, 0, -110], [45, 0, -110], [-45, 0, 110], [45, 0, 110],
                 [-130, 0, -65], [130, 0, -65], [-130, 0, 65], [130, 0, 65],
                 [-65, 0, -130], [65, 0, -130], [-65, 0, 130], [65, 0, 130],
                 [-170, 0, -90], [170, 0, -90], [-170, 0, 90], [170, 0, 90],
                 [-90, 0, -170], [90, 0, -170], [-90, 0, 170], [90, 0, 170],
-                [-80, 0, -40], [80, 0, -40], [-80, 0, 40], [80, 0, 40],
-                [-40, 0, -80], [40, 0, -80], [-40, 0, 80], [40, 0, 80],
-                
-                // Rocks for further expanded terrain
-                [-215, 0, -55], [215, 0, -55], [-215, 0, 55], [215, 0, 55],
-                [-55, 0, -215], [55, 0, -215], [-55, 0, 215], [55, 0, 215],
-                [-235, 0, -125], [235, 0, -125], [-235, 0, 125], [235, 0, 125],
-                [-125, 0, -235], [125, 0, -235], [-125, 0, 235], [125, 0, 235],
-                [-190, 0, -190], [190, 0, -190], [-190, 0, 190], [190, 0, 190],
-                [-265, 0, -75], [265, 0, -75], [-265, 0, 75], [265, 0, 75],
-                [-75, 0, -265], [75, 0, -265], [-75, 0, 265], [75, 0, 265],
-                
-                // Rock formations near hills
                 [195, 0, 10], [-195, 0, -10], [10, 0, -195], [-10, 0, 195],
                 [115, 0, -115], [-115, 0, 115], [155, 0, 155], [-155, 0, -155],
-                [230, 0, 80], [-230, 0, -80], [80, 0, -230], [-80, 0, 230],
                 [185, 0, -115], [-185, 0, 115], [115, 0, 185], [-115, 0, -185],
-                [255, 0, 35], [-255, 0, -35], [35, 0, -255], [-35, 0, 255],
-                [205, 0, 205], [-205, 0, -205], [205, 0, -205], [-205, 0, 205],
+                [-190, 0, -190], [190, 0, -190], [-190, 0, 190], [190, 0, 190],
             ].map((position, idx) => (
                 <TreeLoader
+                    adventureStyle={adventureStyle}
                     key={`rock-${idx}`}
                     position={position as [number, number, number]}
-                    scale={(0.7 + Math.cos(idx * 0.2) * 0.3) * 10} // Varied scales multiplied by 10
-                    treeType="rock" // Use only rocks for these positions
+                    scale={(0.7 + Math.cos(idx * 0.2) * 0.3) * 10}
+                    treeType="rock"
+                />
+            ))}
+
+            {/* Valley floor boulders - at lower Y positions matching valley depth */}
+            {[
+                [-265, -45, -75], [265, -45, -75], [-265, -45, 75], [265, -45, 75],
+                [-75, -45, -265], [75, -45, -265], [-75, -45, 265], [75, -45, 265],
+                [-300, -55, -100], [300, -55, -100], [-300, -55, 100], [300, -55, 100],
+                [-320, -55, 0], [320, -55, 0], [0, -55, -320], [0, -55, 320],
+                [-280, -50, -200], [280, -50, -200], [-280, -50, 200], [280, -50, 200],
+            ].map((position, idx) => (
+                <TreeLoader
+                    adventureStyle={adventureStyle}
+                    key={`valley-rock-${idx}`}
+                    position={position as [number, number, number]}
+                    scale={(1.0 + Math.cos(idx * 0.3) * 0.4) * 12}
+                    treeType="rock"
                 />
             ))}
             
@@ -647,30 +786,15 @@ export function Platforms() {
                 [-85, 0, -35], [85, 0, -35], [-85, 0, 35], [85, 0, 35],
                 [-35, 0, -85], [35, 0, -85], [-35, 0, 85], [35, 0, 85],
                 
-                // Further plants and bushes for the expanded terrain
+                // Desert vegetation (sparse, within 200 range)
                 [-185, 0, -65], [185, 0, -65], [-185, 0, 65], [185, 0, 65],
                 [-65, 0, -185], [65, 0, -185], [-65, 0, 185], [65, 0, 185],
-                [-210, 0, -100], [210, 0, -100], [-210, 0, 100], [210, 0, 100],
-                [-100, 0, -210], [100, 0, -210], [-100, 0, 210], [100, 0, 210],
                 [-175, 0, -175], [175, 0, -175], [-175, 0, 175], [175, 0, 175],
-                [-245, 0, -45], [245, 0, -45], [-245, 0, 45], [245, 0, 45],
-                [-45, 0, -245], [45, 0, -245], [-45, 0, 245], [45, 0, 245],
-                
-                // Plants near the extended hills
-                [205, 0, 15], [-205, 0, -15], [15, 0, -205], [-15, 0, 205],
+                [195, 0, 15], [-195, 0, -15], [15, 0, -195], [-15, 0, 205],
                 [125, 0, -125], [-125, 0, 125], [165, 0, 165], [-165, 0, -165],
-                [240, 0, 90], [-240, 0, -90], [90, 0, -240], [-90, 0, 240],
-                [195, 0, -125], [-195, 0, 125], [125, 0, 195], [-125, 0, -195],
-                [260, 0, 40], [-260, 0, -40], [40, 0, -260], [-40, 0, 260],
-                
-                // Distant plants
-                [225, 0, 225], [-225, 0, -225], [225, 0, -225], [-225, 0, 225],
-                [275, 0, 135], [-275, 0, -135], [135, 0, -275], [-135, 0, 275],
-                [290, 0, -50], [-290, 0, 50], [50, 0, 290], [-50, 0, -290],
-                [230, 0, -170], [-230, 0, 170], [170, 0, 230], [-170, 0, -230],
-                [255, 0, 255], [-255, 0, -255], [255, 0, -255], [-255, 0, 255],
             ].map((position, idx) => (
                 <TreeLoader
+                    adventureStyle={adventureStyle}
                     key={`plant-${idx}`}
                     position={position as [number, number, number]}
                     scale={(0.5 + Math.sin(idx * 0.3) * 0.2) * 10} // Varied scales multiplied by 10

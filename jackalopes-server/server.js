@@ -20,7 +20,14 @@ const PORT = process.env.SERVER_PORT || 8082;
 // Storage for active connections and game sessions
 const clients = new Map();
 const sessions = new Map();
+const sessionDeletionTimers = new Map(); // Grace period timers for empty sessions
 let clientIdCounter = 1;
+
+// Grace period before deleting empty sessions (ms)
+const SESSION_DELETION_GRACE_PERIOD = 10000;
+const PLAYER_INACTIVE_TIMEOUT = 15000;
+const INACTIVE_SWEEP_INTERVAL = 5000;
+const ROUND_RESET_INACTIVE_TIMEOUT = 8000;
 
 // Create an HTTP server for WebSocket handshake
 const server = http.createServer((req, res) => {
@@ -42,6 +49,67 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running at http://0.0.0.0:${PORT}/`);
     logMessage(`Server running on port ${PORT}`);
 });
+
+setInterval(() => {
+    const now = Date.now();
+
+    for (const [clientId, client] of clients.entries()) {
+        if (!client || !client.sessionId) continue;
+        if (!client.lastSeen) continue;
+
+        const inactiveFor = now - client.lastSeen;
+        if (inactiveFor < PLAYER_INACTIVE_TIMEOUT) continue;
+
+        logMessage(`Client ${clientId} (${client.playerName || 'unknown'}) inactive for ${inactiveFor}ms - removing from lobby/session`);
+
+        const sessionId = client.sessionId;
+        const playerId = client.playerId;
+        const playerName = client.playerName;
+
+        handleLeaveSession(clientId);
+
+        if (client.socket && !client.socket.destroyed) {
+            try {
+                client.socket.destroy();
+            } catch (err) {
+                logMessage(`Error destroying inactive client ${clientId} socket: ${err.message}`);
+            }
+        }
+
+        clients.delete(clientId);
+        logMessage(`Inactive client ${clientId} (${playerName || playerId || 'unknown'}) purged from session ${sessionId}`);
+    }
+}, INACTIVE_SWEEP_INTERVAL);
+
+function purgeInactivePlayersInSession(sessionId, inactiveTimeoutMs, reason = 'inactive cleanup') {
+    const now = Date.now();
+
+    for (const [clientId, client] of clients.entries()) {
+        if (!client || client.sessionId !== sessionId) continue;
+        if (!client.lastSeen) continue;
+
+        const inactiveFor = now - client.lastSeen;
+        if (inactiveFor < inactiveTimeoutMs) continue;
+
+        logMessage(`Client ${clientId} (${client.playerName || 'unknown'}) inactive for ${inactiveFor}ms during ${reason} - removing from lobby/session`);
+
+        const playerId = client.playerId;
+        const playerName = client.playerName;
+
+        handleLeaveSession(clientId);
+
+        if (client.socket && !client.socket.destroyed) {
+            try {
+                client.socket.destroy();
+            } catch (err) {
+                logMessage(`Error destroying ${reason} client ${clientId} socket: ${err.message}`);
+            }
+        }
+
+        clients.delete(clientId);
+        logMessage(`${reason} purged client ${clientId} (${playerName || playerId || 'unknown'}) from session ${sessionId}`);
+    }
+}
 
 // Set up graceful shutdown
 process.on('SIGTERM', shutdownServer);
@@ -78,7 +146,9 @@ function handleWebSocketUpgrade(req, socket, head) {
             id: clientId,
             sessionId: null,
             playerName: null,
-            authenticated: false
+            authenticated: false,
+            lastSeen: Date.now(),
+            receiveBuffer: Buffer.alloc(0)
         });
 
         // Handle socket events
@@ -119,16 +189,40 @@ function generateAcceptKey(key) {
  */
 function handleWebSocketData(clientId, buffer) {
     try {
-        const frames = decodeWebSocketFrames(buffer);
-        
+        const client = clients.get(clientId);
+        if (!client) return;
+
+        const buffered = client.receiveBuffer && client.receiveBuffer.length
+            ? Buffer.concat([client.receiveBuffer, buffer])
+            : buffer;
+
+        const { frames, remaining } = decodeWebSocketFrames(buffered);
+        client.receiveBuffer = remaining;
+
         for (const frame of frames) {
             if (frame.opcode === 8) { // Close frame
                 handleDisconnect(clientId);
                 return;
             }
-            
-            if (frame.opcode === 1) { // Text frame
-                const message = frame.payload.toString('utf8');
+
+            if (frame.opcode === 1 || frame.opcode === 0) { // Text / continuation frame
+                const isContinuation = frame.opcode === 0;
+
+                if (!isContinuation) {
+                    client.textFrameBuffer = frame.payload;
+                } else if (client.textFrameBuffer && client.textFrameBuffer.length) {
+                    client.textFrameBuffer = Buffer.concat([client.textFrameBuffer, frame.payload]);
+                } else {
+                    client.textFrameBuffer = frame.payload;
+                }
+
+                if (!frame.fin) {
+                    continue;
+                }
+
+                const completePayload = client.textFrameBuffer || frame.payload;
+                client.textFrameBuffer = null;
+                const message = completePayload.toString('utf8');
                 handleClientMessage(clientId, message);
             }
         }
@@ -143,41 +237,64 @@ function handleWebSocketData(clientId, buffer) {
 function decodeWebSocketFrames(buffer) {
     const frames = [];
     let offset = 0;
-    
+
     while (offset < buffer.length) {
+        const frameStart = offset;
+
+        if (buffer.length - offset < 2) {
+            break;
+        }
+
         const firstByte = buffer[offset];
         const secondByte = buffer[offset + 1];
-        
+
         const fin = Boolean(firstByte & 0x80);
         const opcode = firstByte & 0x0F;
         const masked = Boolean(secondByte & 0x80);
         let payloadLength = secondByte & 0x7F;
-        
+
         offset += 2;
-        
+
         if (payloadLength === 126) {
+            if (buffer.length - offset < 2) {
+                offset = frameStart;
+                break;
+            }
             payloadLength = buffer.readUInt16BE(offset);
             offset += 2;
         } else if (payloadLength === 127) {
-            // 64-bit length is not fully supported
+            if (buffer.length - offset < 8) {
+                offset = frameStart;
+                break;
+            }
+            // 64-bit length is not fully supported, but this keeps framing correct.
             payloadLength = buffer.readUInt32BE(offset + 4);
             offset += 8;
         }
-        
+
         let maskingKey;
         if (masked) {
+            if (buffer.length - offset < 4) {
+                offset = frameStart;
+                break;
+            }
             maskingKey = buffer.slice(offset, offset + 4);
             offset += 4;
         }
-        
-        const payload = buffer.slice(offset, offset + payloadLength);
-        
+
+        if (buffer.length - offset < payloadLength) {
+            offset = frameStart;
+            break;
+        }
+
+        const payload = Buffer.from(buffer.slice(offset, offset + payloadLength));
+
         if (masked) {
             for (let i = 0; i < payload.length; i++) {
                 payload[i] = payload[i] ^ maskingKey[i % 4];
             }
         }
-        
+
         frames.push({
             fin,
             opcode,
@@ -185,11 +302,14 @@ function decodeWebSocketFrames(buffer) {
             payloadLength,
             payload
         });
-        
+
         offset += payloadLength;
     }
-    
-    return frames;
+
+    return {
+        frames,
+        remaining: buffer.slice(offset)
+    };
 }
 
 /**
@@ -218,6 +338,14 @@ function handleClientMessage(clientId, message) {
             case 'player_update':
                 handlePlayerUpdate(clientId, data);
                 break;
+
+            case 'request_player_list':
+                handleRequestPlayerList(clientId);
+                break;
+
+            case 'game_snapshot':
+                // Legacy client message; ignore to avoid noisy unsupported-message churn.
+                break;
                 
             case 'game_event':
                 handleGameEvent(clientId, data);
@@ -225,6 +353,14 @@ function handleClientMessage(clientId, message) {
                 
             case 'chat':
                 handleChat(clientId, data);
+                break;
+
+            case 'voice_signal':
+                handleVoiceSignal(clientId, data);
+                break;
+
+            case 'flashlight_pickup':
+                handleFlashlightPickup(clientId, data);
                 break;
                 
             case 'leave_session':
@@ -338,6 +474,7 @@ function handleAuth(clientId, data) {
  */
 function handleJoinSession(clientId, data) {
     const client = clients.get(clientId);
+    const gameMode = data.gameMode === 'adventure' ? 'adventure' : 'hunt';
     
     if (!client.authenticated) {
         sendToClient(clientId, {
@@ -369,8 +506,11 @@ function handleJoinSession(clientId, data) {
             sessionId = 'session_' + Math.random().toString(36).substr(2, 9);
             sessions.set(sessionId, {
                 key: sessionKey,
+                gameMode,
                 players: new Map(),
-                created: Date.now()
+                created: Date.now(),
+                matchStartTime: Date.now(),
+                matchDuration: 300,
             });
         }
     } else {
@@ -380,15 +520,36 @@ function handleJoinSession(clientId, data) {
         
         sessions.set(sessionId, {
             key: sessionKey,
+            gameMode,
             players: new Map(),
-            created: Date.now()
+            created: Date.now(),
+            matchStartTime: Date.now(),
+            matchDuration: 300,
         });
     }
     
     const session = sessions.get(sessionId);
-    
-    // Store preferredRole from join request as playerType
-    if (data.preferredRole) {
+
+    if (!session.matchStartTime) {
+        session.matchStartTime = Date.now();
+    }
+    if (!session.matchDuration) {
+        session.matchDuration = 300;
+    }
+
+    // Cancel any pending deletion timer for this session
+    if (sessionDeletionTimers.has(sessionId)) {
+        clearTimeout(sessionDeletionTimers.get(sessionId));
+        sessionDeletionTimers.delete(sessionId);
+        logMessage(`Session ${sessionId} deletion cancelled - player rejoining`);
+    }
+
+    client.gameMode = gameMode;
+
+    // Adventure is cooperative: every connection is a jackalope.
+    if (gameMode === 'adventure') {
+        client.playerType = 'jackalope';
+    } else if (data.preferredRole) {
         client.playerType = data.preferredRole;
     }
     
@@ -405,9 +566,46 @@ function handleJoinSession(clientId, data) {
         logMessage(`Auto-assigned playerType '${client.playerType}' to ${client.playerName} (mercs=${mercCount}, jackalopes=${jackalopeCount})`);
     }
     
+    if (!session.flashlightPickup) {
+        const flashlightSpawnPoints = [
+            [-55, 2.4, -18],
+            [-42, 2.4, 24],
+            [-68, 2.4, 8],
+            [-32, 2.4, -36],
+            [-78, 2.4, -8],
+            [-26, 2.4, 36],
+        ];
+        session.flashlightPickup = {
+            collected: false,
+            spawnPoint: flashlightSpawnPoints[Math.floor(Math.random() * flashlightSpawnPoints.length)],
+            collectedBy: null,
+        };
+    }
+
     // Add player to session
     session.players.set(client.playerId, clientId);
     client.sessionId = sessionId;
+
+    const existingPlayers = {};
+    for (const [otherId, otherClientId] of session.players.entries()) {
+        if (otherId === client.playerId) continue;
+
+        const otherClient = clients.get(otherClientId);
+        const otherState = otherClient?.lastState || {};
+
+        existingPlayers[otherId] = {
+            position: otherState.position || [0, 1, 0],
+            rotation: otherState.rotation || [0, 0, 0, 1],
+            health: 100,
+            playerType: otherClient?.playerType || 'merc',
+            flashlightOn: !!otherState.flashlightOn,
+            cameraPitch: otherState.cameraPitch || 0,
+            droneActive: !!otherState.droneActive,
+            dronePosition: otherState.dronePosition,
+            droneRotation: otherState.droneRotation,
+            droneThermalActive: !!otherState.droneThermalActive,
+        };
+    }
     
     // Notify client
     sendToClient(clientId, {
@@ -420,7 +618,13 @@ function handleJoinSession(clientId, data) {
             id: client.playerId,
             name: client.playerName
         },
-        playerType: client.playerType
+        players: existingPlayers,
+        playerType: client.playerType,
+        gameMode,
+        flashlightPickup: session.flashlightPickup,
+        matchStartTime: session.matchStartTime,
+        matchDuration: session.matchDuration,
+        serverTime: Date.now(),
     });
     
     // Notify other players in session
@@ -432,7 +636,13 @@ function handleJoinSession(clientId, data) {
                     id: client.playerId,
                     name: client.playerName
                 },
-                playerType: client.playerType
+                playerType: client.playerType,
+                initialState: client.lastState || {
+                    position: [0, 1, 0],
+                    rotation: [0, 0, 0, 1],
+                    health: 100,
+                    playerType: client.playerType,
+                }
             });
         }
     }
@@ -450,6 +660,8 @@ function handlePlayerUpdate(clientId, data) {
         return;
     }
     
+    client.lastSeen = Date.now();
+
     if (!data.state) {
         sendToClient(clientId, {
             type: 'error',
@@ -457,6 +669,8 @@ function handlePlayerUpdate(clientId, data) {
         });
         return;
     }
+
+    client.lastState = data.state;
     
     const session = sessions.get(client.sessionId);
     if (!session) return;
@@ -472,6 +686,47 @@ function handlePlayerUpdate(clientId, data) {
             });
         }
     }
+}
+
+function handleRequestPlayerList(clientId) {
+    const client = clients.get(clientId);
+
+    if (!client || !client.authenticated || !client.sessionId) {
+        return;
+    }
+
+    const session = sessions.get(client.sessionId);
+    if (!session) return;
+
+    const players = {};
+
+    for (const [playerId, playerClientId] of session.players.entries()) {
+        const sessionClient = clients.get(playerClientId);
+        const state = sessionClient?.lastState || {};
+
+        players[playerId] = {
+            position: state.position || [0, 1, 0],
+            rotation: state.rotation || [0, 0, 0, 1],
+            health: 100,
+            playerType: sessionClient?.playerType || 'merc',
+            flashlightOn: !!state.flashlightOn,
+            cameraPitch: state.cameraPitch || 0,
+            droneActive: !!state.droneActive,
+            dronePosition: state.dronePosition,
+            droneRotation: state.droneRotation,
+            droneThermalActive: !!state.droneThermalActive,
+        };
+    }
+
+    sendToClient(clientId, {
+        type: 'player_list',
+        players,
+        session: {
+            id: client.sessionId,
+            key: session.key,
+        },
+        serverTime: Date.now(),
+    });
 }
 
 /**
@@ -495,10 +750,30 @@ function handleGameEvent(clientId, data) {
     const session = sessions.get(client.sessionId);
     if (!session) return;
     
+    client.lastSeen = Date.now();
+
     // Add player and timestamp information
     const event = data.event;
     event.player = client.playerId;
     event.timestamp = Date.now();
+
+    if (event.event_type === 'game_score_update' && event.source === 'timer_reset') {
+        session.matchStartTime = Date.now();
+        if (!session.matchDuration) {
+            session.matchDuration = 300;
+        }
+
+        for (const [_, otherClientId] of session.players.entries()) {
+            sendToClient(otherClientId, {
+                type: 'match_timer',
+                matchStartTime: session.matchStartTime,
+                matchDuration: session.matchDuration,
+                serverTime: Date.now(),
+            });
+        }
+
+        purgeInactivePlayersInSession(client.sessionId, ROUND_RESET_INACTIVE_TIMEOUT, 'round reset cleanup');
+    }
     
     // Broadcast to all players in session (including sender)
     for (const [_, otherClientId] of session.players.entries()) {
@@ -526,16 +801,50 @@ function handleChat(clientId, data) {
     const session = sessions.get(client.sessionId);
     if (!session) return;
     
-    // Sanitize message
-    const message = data.message.replace(/[^\w\s.!?,]/g, '');
+    const chatId = data.id || `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const requestedScope = data.scope === 'team' || data.scope === 'proxy' || data.scope === 'all'
+        ? data.scope
+        : 'all';
+    const playerType = client.playerType || data.playerType || 'merc';
     
-    // Broadcast to all players in session
+    // Sanitize message
+    const message = data.message.replace(/[^\w\s.!?,:'"()\-]/g, '');
+
+    const recipients = [];
     for (const [_, otherClientId] of session.players.entries()) {
-        sendToClient(otherClientId, {
+        const otherClient = clients.get(otherClientId);
+        if (!otherClient) continue;
+
+        let shouldSend = false;
+        let deliveredByProxy = false;
+        let effectiveScope = requestedScope;
+
+        if (requestedScope === 'all') {
+            shouldSend = true;
+        } else if (requestedScope === 'team') {
+            shouldSend = (otherClient.playerType || 'merc') === playerType;
+        } else if (requestedScope === 'proxy') {
+            shouldSend = (otherClient.playerType || 'merc') !== playerType;
+            deliveredByProxy = shouldSend;
+            effectiveScope = 'team';
+        }
+
+        if (shouldSend) {
+            recipients.push({ otherClientId, deliveredByProxy, effectiveScope });
+        }
+    }
+
+    for (const recipient of recipients) {
+        sendToClient(recipient.otherClientId, {
             type: 'chat',
+            id: chatId,
             player: client.playerId,
             playerName: client.playerName,
-            message: message,
+            playerType,
+            message,
+            scope: requestedScope,
+            deliveredByProxy: recipient.deliveredByProxy,
+            effectiveScope: recipient.effectiveScope,
             timestamp: Date.now()
         });
     }
@@ -544,6 +853,75 @@ function handleChat(clientId, data) {
 /**
  * Handle session leave requests
  */
+function handleFlashlightPickup(clientId, data) {
+    const client = clients.get(clientId);
+
+    if (!client || !client.authenticated || !client.sessionId) {
+        return;
+    }
+
+    const session = sessions.get(client.sessionId);
+    if (!session || !session.flashlightPickup) return;
+
+    if (session.flashlightPickup.collected) return;
+
+    session.flashlightPickup.collected = true;
+    session.flashlightPickup.collectedBy = client.playerId;
+    session.flashlightPickup.collectedAt = Date.now();
+
+    for (const [_, otherClientId] of session.players.entries()) {
+        sendToClient(otherClientId, {
+            type: 'flashlight_pickup',
+            flashlightPickup: session.flashlightPickup,
+            player: client.playerId,
+            timestamp: Date.now()
+        });
+    }
+}
+
+function handleVoiceSignal(clientId, data) {
+    const client = clients.get(clientId);
+
+    if (!client || !client.authenticated || !client.sessionId || !data.signal) {
+        return;
+    }
+
+    const session = sessions.get(client.sessionId);
+    if (!session) return;
+
+    const requestedScope = data.scope === 'team' || data.scope === 'proxy' || data.scope === 'all'
+        ? data.scope
+        : 'team';
+    const playerType = client.playerType || 'merc';
+    const targetPlayerId = data.targetPlayerId || null;
+
+    for (const [otherPlayerId, otherClientId] of session.players.entries()) {
+        if (otherPlayerId === client.playerId) continue;
+        if (targetPlayerId && otherPlayerId !== targetPlayerId) continue;
+
+        const otherClient = clients.get(otherClientId);
+        if (!otherClient) continue;
+
+        const otherType = otherClient.playerType || 'merc';
+        const shouldSend = requestedScope === 'all'
+            || (requestedScope === 'team' && otherType === playerType)
+            || (requestedScope === 'proxy' && otherType !== playerType);
+
+        if (!shouldSend) continue;
+
+        sendToClient(otherClientId, {
+            type: 'voice_signal',
+            fromPlayerId: client.playerId,
+            fromPlayerName: client.playerName,
+            fromPlayerType: playerType,
+            scope: requestedScope,
+            targetPlayerId: otherPlayerId,
+            signal: data.signal,
+            timestamp: Date.now()
+        });
+    }
+}
+
 function handleLeaveSession(clientId) {
     const client = clients.get(clientId);
     
@@ -569,10 +947,27 @@ function handleLeaveSession(clientId) {
         });
     }
     
-    // Clean up empty sessions
+    // Clean up empty sessions with a grace period
     if (session.players.size === 0) {
-        sessions.delete(client.sessionId);
-        logMessage(`Session ${client.sessionId} removed (empty)`);
+        const sessionIdToDelete = client.sessionId;
+        logMessage(`Session ${sessionIdToDelete} is empty, starting ${SESSION_DELETION_GRACE_PERIOD/1000}s grace period`);
+
+        // Cancel any existing timer for this session
+        if (sessionDeletionTimers.has(sessionIdToDelete)) {
+            clearTimeout(sessionDeletionTimers.get(sessionIdToDelete));
+        }
+
+        // Set a timer to delete after grace period
+        const timer = setTimeout(() => {
+            const sessionToDelete = sessions.get(sessionIdToDelete);
+            if (sessionToDelete && sessionToDelete.players.size === 0) {
+                sessions.delete(sessionIdToDelete);
+                logMessage(`Session ${sessionIdToDelete} removed after grace period (still empty)`);
+            }
+            sessionDeletionTimers.delete(sessionIdToDelete);
+        }, SESSION_DELETION_GRACE_PERIOD);
+
+        sessionDeletionTimers.set(sessionIdToDelete, timer);
     }
     
     logMessage(`Client ${clientId} (${client.playerName}) left session ${client.sessionId}`);

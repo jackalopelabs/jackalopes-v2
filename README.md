@@ -2,6 +2,33 @@
 
 A 3D first-person shooter game built with React Three Fiber, Rapier physics, and TypeScript.
 
+## Adventure Terrain Editor
+
+The Adventure Valley terrain is a versioned Jackalopes level document shared by the editor and the playable Rapier collision mesh.
+
+- Play: `/?mode=adventure`
+- Edit: `/?mode=adventure&editor=terrain`
+- Left-drag sculpts. Shift + left-drag or middle-button drag pans the view and moves the orbit point. Right-drag or Option/Alt + left-drag orbits around that point; the mouse wheel zooms. Panning never paints or changes the saved map.
+- Save publishes the current level as the shared multiplayer map while retaining a browser copy for offline fallback. Export/import JSON keeps portable backups.
+
+The editor supports raise, lower, smooth, flatten, water, and dry brushes with per-stroke undo/redo. Lower a riverbed, choose Water, set its surface height, then paint a river or moat over it. Painted water supports swimming when it is deep enough (at least 2.3 m); shallows remain walkable. In deep water, use WASD / left stick to swim, hold Space / A (Cross) to rise, and C / LT (L2) to dive. Release vertical controls to gently float toward the surface. Holding up stops at the waterline; leaving the painted water restores normal gravity. Swimming has no oxygen timer. Terrain and obstacles still block movement. Adventure mode loads the shared terrain and water at startup and polls for newer revisions while players are online.
+
+## Adventure visual style
+
+Adventure uses stable twilight lighting, cool sky fill and warm highlights, a procedural dusk sky, and a restrained mint/copper survey grid. Distance-faded grid lines, slope contours, faceted terrain shading, and atmospheric haze preserve the simulation look while improving depth and readability. Low quality keeps the core look without post-processing; higher settings add shadowing on scenery and a small number of ambient motes. Hunt retains its timed lighting, and the golden mushroom still reveals its temporary holographic palette.
+
+## Foliage test grove
+
+One optional, 28m-wide grove near the western Adventure starting area adds instanced grass and ferns with gentle wind. **Grove: Lush / Classic** in the Adventure bar (or the G key while exploring) toggles only that patch, remembers the local choice, and does not modify the shared map. The existing trees, visible grid path, pickups, and collisions stay unchanged. Placement follows sculpted terrain and skips water and steep banks. Reduced-motion preferences disable wind. Low quality caps the patch at two draw calls and about 40k triangles, with no foliage shadow casting; it is hidden beyond 90m. This is a bounded visual experiment, not a measured FPS guarantee on player devices.
+
+## Adventure caves
+
+The central rabbit hole becomes a real underground cave entrance in Adventure: walk down its ramp to a hub and three connected crystal chambers. Continue through the northern chamber into a descending passage, a large underground lake, and a dry crystal grotto on the far shore. The lake is up to 9m deep, with room to swim at the surface or dive among submerged crystals. Warm guide lights and amber floor chevrons point back toward the entrance. There are no loading portals or one-way drops. The underground camera moves closer and checks the cave shell to stay inside walls and ceilings.
+
+A winding waterslide starts in the northern upper chamber at approximately (-5, -70). Walk beneath the SLIDE arch and press **F / controller X / touch Use** to board. The guided flume bends down into the underground lake and hands control back to swimming with a splash. Follow the ordinary lit approach back up to ride again; respawning cancels a ride. No new multiplayer message type is required.
+
+Hunt retains its original central scoring circle. Cave geometry is a runtime Adventure overlay: it opens only the central four terrain cells, restores their surface around the entrance, and leaves the shared editor document unchanged. Existing surface swimming and pickups remain in place. Underground water is a bounded Adventure-only volume, separate from the terrain editor water level. The same keyboard, gamepad, and contextual touch swimming controls work in the lake.
+
 ## Features
 
 - First-person character controller with smooth movement and physics
@@ -36,8 +63,8 @@ A 3D first-person shooter game built with React Three Fiber, Rapier physics, and
 
 1. Clone the repository
    ```
-   git clone https://github.com/yourusername/jackalopes.git
-   cd jackalopes
+   git clone https://github.com/jackalopelabs/jackalopes-v2.git
+   cd jackalopes-v2
    ```
 
 2. Install dependencies
@@ -250,3 +277,40 @@ Then, update your imports to use the asset index:
 + // New way - centralized asset management
 + import { MercModelPath } from '../assets';
 ```
+
+## Golden mushroom / Holographic Sense
+
+Adventure mode hides a golden mushroom in the western forest. Walk close and press F or controller X (Square) to eat it. For 60 seconds, the simulation grid shifts through cyan, violet, and gold while slow sonar pulses reveal faint outlines of nearby scenery through obstacles (70 m range). The ordinary look returns when the effect expires or you respawn; collisions never change. Each player can discover it independently, and it regrows locally after 90 seconds. The pickup follows the saved terrain height and prefers a dry hiding spot.
+
+### Touch controls (iPad, phones, and touch-enabled handhelds)
+
+Touch devices show one compact movement stick. Push it fully to run; swipe on the right side of the game view to look. Hold **Jump ↑** to jump or swim upward and **Use** to interact/eat nearby items. **Dive** appears only while swimming. Secondary actions are tucked under **…**, with **Shoot** always available for mercs. Moving, looking and holding an action work simultaneously. Menu/editor navigation remains ordinary touch input; touch play does not need pointer lock.
+
+Touch feeds the existing controller path directly, including cameras and held swimming actions. An idle on-screen stick does not mask a connected physical controller, such as the ROG Ally. Releasing/canceling touches, switching away from the page, opening the mode menu, or changing orientation clears held input. No additional multiplayer messages are sent by the UI.
+
+## Working from a fresh checkout
+
+```bash
+npm ci
+npm test
+npm run build
+npm run dev
+```
+
+The tests include a snapshot of the saved Adventure Valley terrain at
+`tests/fixtures/adventure-valley.json`; they do not require the Pod's live
+`level-data/` directory. The fixture is a source-controlled snapshot, and
+runtime map saves stay in the ignored `level-data/` directory. To restore this
+snapshot for a local `serve-prod.cjs` session:
+
+```bash
+mkdir -p level-data
+cp tests/fixtures/adventure-valley.json level-data/adventure-valley.json
+node serve-prod.cjs
+```
+
+Generated `dist-*/` directories and the original large drone download/HDR
+are excluded from Git. The drone meshes, material files, textures, and Blender
+source remain tracked. A verified pre-sync archive containing the original
+assets, saved terrain, source, and Git history is preserved on the BonsaiPod at
+`/mnt/bonsai_data_sfo3/archive/jackalopes-sync-20261003T183342Z/source-and-git.tar.gz`.

@@ -24,3 +24,10 @@ dist-ssr
 *.sw?
 node_modules/
 dist/
+level-data/
+
+# Generated build variants
+/dist-*/
+# Original large drone downloads are preserved in the Pod source backup
+/public/drone-model.rar
+/public/Model 3D/lenong_3_8k.hdr

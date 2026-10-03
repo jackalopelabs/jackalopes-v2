@@ -1,9 +1,11 @@
-import { Canvas } from './common/components/canvas'
+import { adventureCombatState } from './game/adventure-combat-state'
+import { AdventureCombat } from './game/AdventureCombat'
+import { Canvas, compatibilityMode } from './common/components/canvas'
 import { Crosshair } from './common/components/crosshair'
 import { Instructions } from './common/components/instructions'
 import { Environment, MeshReflectorMaterial, PerspectiveCamera, OrbitControls, useProgress } from '@react-three/drei'
 import { EffectComposer, Vignette, ChromaticAberration, BrightnessContrast, ToneMapping, Bloom } from '@react-three/postprocessing'
-import { BlendFunction } from 'postprocessing'
+import { BlendFunction, ToneMappingMode } from 'postprocessing'
 import { useFrame, useThree } from '@react-three/fiber'
 import { CuboidCollider, Physics, RigidBody } from '@react-three/rapier'
 import { useControls, folder, Leva } from 'leva'
@@ -14,9 +16,22 @@ import { Player, PlayerControls } from './game/player'
 import { Jackalope } from './game/jackalope'
 import { SphereTool, setSphereDarkMode } from './game/sphere-tool'
 import { Platforms } from './game/platforms'
+import { FoliageGrove } from './game/FoliageGrove';
+import { waterslideState } from './game/waterslide-state';
+import { caveLayout, isWithinCaveFootprint } from './game/adventure-caves';
+import { loadTerrainLevel } from './game/terrain/level-document';
+import { GROVE_STORAGE_KEY } from './game/foliage-grove';
+import { AdventureAtmosphere } from './game/AdventureAtmosphere';
+import { AdventureLighting } from './game/AdventureLighting';
+import { GoldenMushroom } from './game/GoldenMushroom';
+import { HolographicVision } from './game/HolographicVision';
+import { HolographicSenseHUD } from './components/HolographicSenseHUD';
+import { GOLDEN_VISION_DURATION_MS } from './game/golden-mushroom';
 import { MushroomField } from './game/MushroomField'
 import { GoldenEggField } from './game/GoldenEggField'
 import { RainbowEggField } from './game/RainbowEggField'
+import { GreenEggField } from './game/GreenEggField'
+import { CloudPath } from './game/CloudPath'
 import { MultiplayerManager, useRemoteShots } from './network/MultiplayerManager'
 import { NetworkStats } from './network/NetworkStats'
 import { ConnectionManager } from './network/ConnectionManager'
@@ -27,6 +42,7 @@ import { WeaponSoundEffects } from './components/WeaponSoundEffects' // Import t
 import { HealthBar } from './components/HealthBar' // Import the HealthBar component
 import { AudioCommsPanel } from './components/AudioCommsPanel'
 import { FlashlightPickup } from './components/FlashlightPickup'
+import { DronePickup } from './components/DronePickup'
 import { initDebugSystem, DEBUG_LEVELS } from './utils/debugUtils';
 import { PlayerPositionTracker } from './components/PlayerPositionTracker';
 import entityStateObserver from './network/EntityStateObserver';
@@ -37,7 +53,6 @@ import { useGLTF } from '@react-three/drei';
 import { MercModelPath, JackalopeModelPath } from './assets';
 import { ModelLoader } from './components/ModelLoader';
 import { ModelChecker } from './components/ModelChecker';
-import ScoreDisplay from './components/ScoreDisplay'; // Import the new ScoreDisplay component
 import { IntroScreenManager } from './components/IntroScreen';
 import { GameOverScreen } from './components/GameOverScreen';
 import { Crosshair as GameCrosshair } from './components/Crosshair';
@@ -45,6 +60,13 @@ import { KillFeed, emitKillFeed } from './components/KillFeed';
 import { GameHUD } from './components/GameHUD';
 import { ScreenShake, triggerScreenShake } from './components/ScreenShake';
 import { RespawnButton } from './components/RespawnButton';
+import { MercDrone } from './game/MercDrone';
+import { GameModeMenu } from './components/GameModeMenu';
+import { SwimmingHUD } from './components/SwimmingHUD';
+import { AdventureHUD } from './components/AdventureHUD';
+import { getGameModeFromUrl, type GameMode } from './game/game-mode';
+import { consumeTouchLookDelta } from './common/touch-input';
+import { getActiveGamepad } from './common/hooks/use-gamepad';
 
 // Add TypeScript declaration for window.__setGraphicsQuality
 declare global {
@@ -58,14 +80,22 @@ declare global {
             sendRespawnRequest: (playerId: string, spawnPosition?: [number, number, number]) => void;
         };
         jackalopesGame?: {
+            gameMode?: GameMode;
             playerType?: 'merc' | 'jackalope';
             levaPanelState?: 'open' | 'closed';
             flashlightOn?: boolean; // Add flashlight state
             flashlightCollected?: boolean;
+            droneCollected?: boolean;
+            droneActive?: boolean;
+            dronePickupNearby?: boolean;
+            dronePosition?: [number, number, number];
+            droneRotation?: [number, number, number, number];
+            droneThermalActive?: boolean;
             debugLevel?: number; // Store debug level
             inventory?: {
                 goldenEggs: number;
                 rainbowEggs: number;
+                greenNightVision: boolean;
             };
             // Add spawn manager
             spawnManager?: {
@@ -116,7 +146,6 @@ const Moon = ({ orbitRadius, height, orbitSpeed }: { orbitRadius: number, height
         // Update spotlight target to point slightly downward
         if (moonLightRef.current.target) {
             moonLightRef.current.target.position.set(x, 0, z);
-            moonLightRef.current.target.updateMatrixWorld();
         }
     });
 
@@ -289,7 +318,7 @@ const Stars = ({ count = 1000, depth = 100, size = 0.2, color = "#ffffff", twink
     );
 };
 
-const Scene = ({ playerRef }: { playerRef: React.RefObject<any> }) => {
+const Scene = ({ playerRef, enabled = true }: { playerRef: React.RefObject<any>, enabled?: boolean }) => {
     // Remove texture loading and replace with solid colors
     // const texture = useTexture('/final-texture.png')
     // texture.wrapS = texture.wrapT = THREE.RepeatWrapping
@@ -300,6 +329,8 @@ const Scene = ({ playerRef }: { playerRef: React.RefObject<any> }) => {
     // Updated map dimensions for the base ground to match platforms.tsx
     const mapWidth = 800
     const mapDepth = 800
+
+    if (!enabled) return null
 
     return (
         <RigidBody type="fixed" position={[0, 0, 0]} colliders={false}>
@@ -728,6 +759,8 @@ const ThirdPersonCameraControls = ({
     enabled,
     distance,
     height,
+    adventureCaves = false,
+    shoulderView = false,
     invertY = false, // Add invert Y option with default = false
 }: {
     player: THREE.Vector3,
@@ -736,17 +769,21 @@ const ThirdPersonCameraControls = ({
     distance: number,
     height: number,
     invertY?: boolean,
+    adventureCaves?: boolean,
+    shoulderView?: boolean,
 }) => {
     // For tracking target position and rotation
     const targetRef = useRef(new THREE.Vector3());
+    const cave = useMemo(() => caveLayout(loadTerrainLevel()), []);
+    const caveRoot = useRef<THREE.Object3D | null>(null);
+    const caveSolids = useRef<THREE.Object3D[]>([]);
+    const cameraRay = useMemo(() => new THREE.Raycaster(), []);
+    const rayDirection = useMemo(() => new THREE.Vector3(), []);
     const isInitializedRef = useRef(false);
     const rotationRef = useRef({ x: 0, y: 0 });
     const pointerLockActiveRef = useRef(false);
     const lastMouseRef = useRef({ x: 0, y: 0 });
     const playerType = useRef<'merc' | 'jackalope'>('merc');
-
-    // Gamepad state for camera control
-    const gamepadRef = useRef<Gamepad | null>(null);
 
     // Get player character type from the App
     useEffect(() => {
@@ -796,8 +833,11 @@ const ThirdPersonCameraControls = ({
         }
 
         // Handle pointer lock for fps-style mouse movement
-        const requestPointerLock = () => {
-            document.body.requestPointerLock();
+        const requestPointerLock = (event?: MouseEvent) => {
+            // Touch look works without pointer lock, which iPad Safari does not provide.
+            if (!document.body.requestPointerLock || navigator.maxTouchPoints > 0 ||
+                (event?.target instanceof Element && event.target.closest('button, a, input, [data-touch-controls]'))) return;
+            Promise.resolve(document.body.requestPointerLock()).catch(() => {});
         };
 
         const handlePointerLockChange = () => {
@@ -835,7 +875,7 @@ const ThirdPersonCameraControls = ({
 
             // Request pointer lock immediately if it's not active yet
             if (!pointerLockActiveRef.current) {
-                document.body.requestPointerLock();
+                requestPointerLock();
             }
         }
 
@@ -867,18 +907,29 @@ const ThirdPersonCameraControls = ({
     }, [enabled]);
 
     // Use frame loop to update the camera smoothly
-    useFrame((_, delta) => {
+    useFrame((state, delta) => {
         if (!enabled || !cameraRef.current) return;
 
+        if (adventureCaves && waterslideState.active) {
+            const yawDifference = Math.atan2(Math.sin(waterslideState.heading - rotationRef.current.y), Math.cos(waterslideState.heading - rotationRef.current.y));
+            rotationRef.current.y += yawDifference * Math.min(1, delta * 7);
+            rotationRef.current.x *= Math.max(0, 1 - delta * 5);
+        }
+        const touchLook = consumeTouchLookDelta();
+        rotationRef.current.y -= touchLook.x * 0.003;
+        rotationRef.current.x = THREE.MathUtils.clamp(rotationRef.current.x + touchLook.y * (invertY ? -0.003 : 0.003), -Math.PI / 3, Math.PI / 3);
+
         // Gamepad right stick camera control
-        const gamepad = navigator.getGamepads()[0];
+        const gamepad = getActiveGamepad();
         if (gamepad) {
             const STICK_DEADZONE = 0.15;
             const CAMERA_SENSITIVITY_X = 0.05;
             const CAMERA_SENSITIVITY_Y = 0.035;
 
-            const rightX = Math.abs(gamepad.axes[2]) > STICK_DEADZONE ? gamepad.axes[2] : 0;
-            const rightY = Math.abs(gamepad.axes[3]) > STICK_DEADZONE ? gamepad.axes[3] : 0;
+            const rawRightX = gamepad.axes[2] ?? 0;
+            const rawRightY = gamepad.axes[3] ?? 0;
+            const rightX = Math.abs(rawRightX) > STICK_DEADZONE ? rawRightX : 0;
+            const rightY = Math.abs(rawRightY) > STICK_DEADZONE ? rawRightY : 0;
 
             if (rightX !== 0 || rightY !== 0) {
                 // Update rotation based on right stick
@@ -921,23 +972,52 @@ const ThirdPersonCameraControls = ({
 
                 targetRef.current.lerp(player, targetSmoothing);
 
-                // Calculate camera position based on rotation around target
+                const underground = adventureCaves && player.y < cave.entranceY + 0.5 &&
+                    isWithinCaveFootprint(player.x, player.z);
+                const followDistance = shoulderView ? (underground ? 4 : 6) : underground ? Math.min(distance, 5) : distance;
+                const followHeight = shoulderView ? 1 : underground ? Math.min(height, 1.8) : height;
+                // A closer underground camera fits tunnels; shell raycasts keep it inside rock.
                 const cameraOffset = new THREE.Vector3(
-                    Math.sin(rotationRef.current.y) * distance,
-                    height + Math.sin(rotationRef.current.x) * distance,
-                    Math.cos(rotationRef.current.y) * distance
+                    Math.sin(rotationRef.current.y) * followDistance,
+                    followHeight + Math.sin(rotationRef.current.x) * followDistance,
+                    Math.cos(rotationRef.current.y) * followDistance
                 );
 
+                if (shoulderView) {
+                    cameraOffset.x += Math.cos(rotationRef.current.y) * .9;
+                    cameraOffset.z -= Math.sin(rotationRef.current.y) * .9;
+                }
                 // Balance camera smoothness and responsiveness
                 const newCamPos = new THREE.Vector3().copy(targetRef.current).add(cameraOffset);
                 const cameraSmoothing = isJackalope ?
                     Math.min(delta * 25.0, 0.6) : // Responsive but still smooth for jackalope
                     Math.min(delta * 8.0, 0.4);   // Normal responsiveness for merc
 
+                const constrainToCave = (candidate: THREE.Vector3) => {
+                    if (!underground) return;
+                    if (!caveRoot.current?.parent) {
+                        caveRoot.current = state.scene.getObjectByName('adventure-caves') || null;
+                        caveSolids.current = [];
+                        caveRoot.current?.traverse(object => {
+                            if (object.userData.caveSolid) caveSolids.current.push(object);
+                        });
+                    }
+                    const length = rayDirection.copy(candidate).sub(targetRef.current).length();
+                    if (length < 0.01) return;
+                    cameraRay.set(targetRef.current, rayDirection.divideScalar(length));
+                    cameraRay.far = length;
+                    const hit = cameraRay.intersectObjects(caveSolids.current, false)[0];
+                    if (hit) candidate.copy(targetRef.current).addScaledVector(rayDirection, Math.max(0.25, hit.distance - 0.25));
+                };
+                constrainToCave(newCamPos);
                 cameraRef.current.position.lerp(newCamPos, cameraSmoothing);
+                constrainToCave(cameraRef.current.position);
 
                 // Look at player
-                cameraRef.current.lookAt(targetRef.current);
+                if (shoulderView) {
+                    rayDirection.set(-Math.sin(rotationRef.current.y) * Math.cos(rotationRef.current.x), -Math.sin(rotationRef.current.x), -Math.cos(rotationRef.current.y) * Math.cos(rotationRef.current.x));
+                    cameraRef.current.lookAt(rayDirection.multiplyScalar(40).add(cameraRef.current.position));
+                } else cameraRef.current.lookAt(targetRef.current);
             }
         } catch (error) {
             console.error("Error in ThirdPersonCameraControls frame update:", error);
@@ -1259,10 +1339,504 @@ const MercFlashblindOverlay = ({ until }: { until: number }) => {
     )
 }
 
+const NightVisionOverlay = ({ active }: { active: boolean }) => {
+    const [noiseTick, setNoiseTick] = useState(0)
+    const [blowout, setBlowout] = useState(0)
+
+    useEffect(() => {
+        if (!active) {
+            setNoiseTick(0)
+            return
+        }
+
+        const interval = window.setInterval(() => setNoiseTick(Date.now()), 75)
+        return () => window.clearInterval(interval)
+    }, [active])
+
+    useEffect(() => {
+        if (!active) {
+            setBlowout(0)
+            return
+        }
+
+        let frameId = 0
+        const localTarget = new THREE.Vector3()
+        const mercOrigin = new THREE.Vector3()
+        const samplePoint = new THREE.Vector3()
+        const toSample = new THREE.Vector3()
+        const beamDirection = new THREE.Vector3()
+        const sampleHeights = [2.8, 4.6, 6.2]
+
+        const evaluate = () => {
+            const liveData = (window as any).__livePlayerData || {}
+            const localPos = window.__localPlayerPosition
+            let strongestHit = 0
+
+            if (localPos) {
+                localTarget.set(localPos.x, localPos.y ?? 0, localPos.z)
+
+                for (const player of Object.values(liveData) as Array<any>) {
+                    if (player?.playerType !== 'merc' || !player?.flashlightOn || !player?.position) continue
+
+                    mercOrigin.set(
+                        player.position.x,
+                        (player.position.y ?? 0) + 6,
+                        player.position.z
+                    )
+
+                    beamDirection.set(
+                        Math.sin(player.rotation || 0) * Math.cos(player.cameraPitch || 0),
+                        -Math.sin(player.cameraPitch || 0),
+                        Math.cos(player.rotation || 0) * Math.cos(player.cameraPitch || 0)
+                    ).normalize()
+
+                    for (const height of sampleHeights) {
+                        samplePoint.set(localTarget.x, localTarget.y + height, localTarget.z)
+                        toSample.copy(samplePoint).sub(mercOrigin)
+
+                        const alongBeam = toSample.dot(beamDirection)
+                        if (alongBeam <= 0.5 || alongBeam > 55) continue
+
+                        const distanceSq = toSample.lengthSq()
+                        const perpendicularSq = Math.max(0, distanceSq - alongBeam * alongBeam)
+                        const perpendicular = Math.sqrt(perpendicularSq)
+                        const coneRadius = Math.max(1.2, Math.tan(0.72) * alongBeam)
+                        if (perpendicular > coneRadius) continue
+
+                        const centerFactor = THREE.MathUtils.clamp(1 - perpendicular / Math.max(0.8, coneRadius * 0.42), 0, 1)
+                        const distanceFactor = THREE.MathUtils.clamp(1 - (alongBeam - 4) / 34, 0, 1)
+                        const candidate = centerFactor * distanceFactor
+
+                        if (candidate > strongestHit) {
+                            strongestHit = candidate
+                        }
+                    }
+                }
+            }
+
+            setBlowout(prev => {
+                const next = THREE.MathUtils.lerp(prev, strongestHit, strongestHit > prev ? 0.42 : 0.22)
+                return Math.abs(next - prev) < 0.005 ? prev : next
+            })
+
+            frameId = window.requestAnimationFrame(evaluate)
+        }
+
+        frameId = window.requestAnimationFrame(evaluate)
+        return () => window.cancelAnimationFrame(frameId)
+    }, [active])
+
+    if (!active) return null
+
+    const grainOffsetA = `${(noiseTick * 0.11) % 37}px ${(noiseTick * 0.07) % 29}px`
+    const grainOffsetB = `${(noiseTick * -0.08) % 31}px ${(noiseTick * 0.13) % 41}px`
+    const baseTintOpacity = 0.22 + blowout * 0.08
+    const grainOpacity = 0.12 + blowout * 0.16
+    const blowoutOpacity = Math.min(1, blowout * 1.15)
+
+    return (
+        <>
+            <div style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 4800,
+                pointerEvents: 'none',
+                background: `radial-gradient(circle at center, rgba(72, 110, 72, ${baseTintOpacity}) 0%, rgba(18, 34, 18, ${baseTintOpacity + 0.16}) 55%, rgba(2, 6, 2, ${Math.min(0.88, baseTintOpacity + 0.42)}) 100%)`,
+                boxShadow: `inset 0 0 160px rgba(4, 10, 4, ${0.86 - blowout * 0.18})`,
+            }} />
+            <div style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 4801,
+                pointerEvents: 'none',
+                opacity: grainOpacity,
+                backgroundImage: `
+                    repeating-linear-gradient(0deg, rgba(255,255,255,0.18) 0px, rgba(255,255,255,0.18) 1px, transparent 1px, transparent 3px),
+                    repeating-linear-gradient(90deg, rgba(0,0,0,0.22) 0px, rgba(0,0,0,0.22) 1px, transparent 1px, transparent 2px),
+                    repeating-linear-gradient(45deg, rgba(255,255,255,0.08) 0px, rgba(255,255,255,0.08) 1px, transparent 1px, transparent 4px)
+                `,
+                backgroundSize: '3px 3px, 2px 2px, 4px 4px',
+                backgroundPosition: `${grainOffsetA}, ${grainOffsetB}, 0px 0px`,
+                mixBlendMode: 'screen',
+            }} />
+            <div style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 4802,
+                pointerEvents: 'none',
+                opacity: blowoutOpacity,
+                transition: 'opacity 50ms linear',
+                background: `radial-gradient(circle at center, rgba(255,255,250, ${0.74 + blowout * 0.22}) 0%, rgba(245,255,235, ${0.36 + blowout * 0.28}) 22%, rgba(210,255,210, 0.18) 46%, rgba(255,255,255,0) 78%)`,
+                boxShadow: `inset 0 0 ${180 + blowout * 220}px rgba(255,255,240, ${0.22 + blowout * 0.58})`,
+            }} />
+        </>
+    )
+}
+
+    // Create a new component for the flashlight UI indicator
+    const FlashlightUI = () => {
+        const [isOn, setIsOn] = useState(false);
+        const [visible, setVisible] = useState(false);
+        const [collected, setCollected] = useState(false);
+        const [hint, setHint] = useState('');
+        const [nearPickup, setNearPickup] = useState(false);
+
+        useEffect(() => {
+            if (window.jackalopesGame?.flashlightOn !== undefined) {
+                setIsOn(window.jackalopesGame.flashlightOn);
+            }
+            setCollected(!!window.jackalopesGame?.flashlightCollected);
+            setVisible(window.jackalopesGame?.playerType === 'merc');
+
+            const handleFlashlightToggle = (event: CustomEvent<{isOn: boolean}>) => {
+                setIsOn(event.detail.isOn);
+            };
+
+            const handlePlayerTypeChange = () => {
+                setVisible(window.jackalopesGame?.playerType === 'merc');
+            };
+
+            const handlePickupChanged = (event: CustomEvent<{collected: boolean}>) => {
+                setCollected(event.detail.collected);
+                if (!event.detail.collected) {
+                    setIsOn(false);
+                }
+            };
+
+            const handleBlocked = () => {
+                setHint('Find the flashlight first');
+                window.setTimeout(() => setHint(''), 1400);
+            };
+
+            const handlePickupNearby = (event: CustomEvent<{nearby: boolean, playerType?: string}>) => {
+                const isMercNearby = event.detail.playerType === 'merc' || event.detail.playerType === undefined;
+                setNearPickup(isMercNearby && event.detail.nearby);
+            };
+
+            window.addEventListener('flashlightToggled', handleFlashlightToggle as EventListener);
+            window.addEventListener('playerTypeChanged', handlePlayerTypeChange);
+            window.addEventListener('flashlightPickupChanged', handlePickupChanged as EventListener);
+            window.addEventListener('flashlightToggleBlocked', handleBlocked as EventListener);
+            window.addEventListener('flashlightPickupNearby', handlePickupNearby as EventListener);
+
+            return () => {
+                window.removeEventListener('flashlightToggled', handleFlashlightToggle as EventListener);
+                window.removeEventListener('playerTypeChanged', handlePlayerTypeChange);
+                window.removeEventListener('flashlightPickupChanged', handlePickupChanged as EventListener);
+                window.removeEventListener('flashlightToggleBlocked', handleBlocked as EventListener);
+                window.removeEventListener('flashlightPickupNearby', handlePickupNearby as EventListener);
+            };
+        }, []);
+
+        if (!visible) return null;
+
+        const label = collected ? `Flashlight: ${isOn ? 'ON' : 'OFF'} [F / X]` : 'Objective: Find the flashlight';
+        const backgroundColor = collected
+            ? (isOn ? 'rgba(255, 255, 0, 0.3)' : 'rgba(100, 100, 100, 0.3)')
+            : 'rgba(255, 214, 102, 0.18)';
+        const color = collected ? (isOn ? '#ffff00' : '#aaaaaa') : '#ffe08a';
+        const border = collected ? `1px solid ${isOn ? '#ffff00' : '#666666'}` : '1px solid rgba(255, 224, 138, 0.55)';
+
+        return (
+            <div style={{
+                position: 'absolute',
+                bottom: '20px',
+                left: '20px',
+                padding: '6px 11px',
+                backgroundColor,
+                color,
+                border,
+                borderRadius: '4px',
+                pointerEvents: 'none',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                userSelect: 'none',
+                zIndex: 1000
+            }}>
+                <div>{label}</div>
+                {!collected && !nearPickup && <div style={{ fontSize: '11px', opacity: 0.85, marginTop: 3 }}>It now spawns inside the walls, closer to center.</div>}
+                {!collected && nearPickup && <div style={{ fontSize: '11px', color: '#fff3b0', marginTop: 3 }}>Press F or X to pick up flashlight</div>}
+                {hint && <div style={{ fontSize: '11px', color: '#ffd1a1', marginTop: 3 }}>{hint}</div>}
+            </div>
+        );
+    };
+    const DroneUI = () => {
+        const [visible, setVisible] = useState(false);
+        const [collected, setCollected] = useState(false);
+        const [active, setActive] = useState(false);
+        const [nearPickup, setNearPickup] = useState(false);
+        const [thermalActive, setThermalActive] = useState(false);
+        const [hint, setHint] = useState('');
+
+        useEffect(() => {
+            const sync = () => {
+                setVisible(window.jackalopesGame?.playerType === 'merc');
+                setCollected(!!window.jackalopesGame?.droneCollected);
+                setActive(!!window.jackalopesGame?.droneActive);
+                setThermalActive(!!window.jackalopesGame?.droneThermalActive);
+            };
+
+            sync();
+
+            const handlePlayerTypeChange = () => sync();
+            const handlePickupChanged = (event: CustomEvent<{collected: boolean}>) => {
+                setCollected(!!event.detail?.collected);
+                if (!event.detail?.collected) setActive(false);
+            };
+            const handleModeToggled = (event: CustomEvent<{active: boolean}>) => {
+                setActive(!!event.detail?.active);
+            };
+            const handlePickupNearby = (event: CustomEvent<{nearby: boolean}>) => {
+                setNearPickup(!!event.detail?.nearby);
+            };
+            const handleThermalToggled = (event: CustomEvent<{active: boolean}>) => {
+                setThermalActive(!!event.detail?.active);
+            };
+            const handleBlocked = () => {
+                setHint('Find the drone first');
+                window.setTimeout(() => setHint(''), 1400);
+            };
+
+            window.addEventListener('playerTypeChanged', handlePlayerTypeChange);
+            window.addEventListener('dronePickupChanged', handlePickupChanged as EventListener);
+            window.addEventListener('droneModeToggled', handleModeToggled as EventListener);
+            window.addEventListener('dronePickupNearby', handlePickupNearby as EventListener);
+            window.addEventListener('droneThermalToggled', handleThermalToggled as EventListener);
+            window.addEventListener('droneToggleBlocked', handleBlocked as EventListener);
+            return () => {
+                window.removeEventListener('playerTypeChanged', handlePlayerTypeChange);
+                window.removeEventListener('dronePickupChanged', handlePickupChanged as EventListener);
+                window.removeEventListener('droneModeToggled', handleModeToggled as EventListener);
+                window.removeEventListener('dronePickupNearby', handlePickupNearby as EventListener);
+                window.removeEventListener('droneThermalToggled', handleThermalToggled as EventListener);
+                window.removeEventListener('droneToggleBlocked', handleBlocked as EventListener);
+            };
+        }, []);
+
+        if (!visible) return null;
+
+        const label = collected
+            ? `Drone: ${active ? 'FLYING' : 'READY'} [G]`
+            : 'Objective: Find the drone';
+        const backgroundColor = collected
+            ? (active ? 'rgba(80, 220, 255, 0.26)' : 'rgba(90, 90, 110, 0.28)')
+            : 'rgba(102, 214, 255, 0.16)';
+        const color = collected ? (active ? '#9df6ff' : '#c7d2fe') : '#8be9fd';
+        const border = collected
+            ? `1px solid ${active ? '#67e8f9' : '#818cf8'}`
+            : '1px solid rgba(103, 232, 249, 0.55)';
+
+        return (
+            <div style={{
+                position: 'absolute',
+                bottom: '76px',
+                left: '20px',
+                padding: '6px 11px',
+                backgroundColor,
+                color,
+                border,
+                borderRadius: '4px',
+                pointerEvents: 'none',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                userSelect: 'none',
+                zIndex: 1000
+            }}>
+                <div>{label}</div>
+                {!collected && !nearPickup && <div style={{ fontSize: '11px', opacity: 0.85, marginTop: 3 }}>Hidden near the flashlight zone, inside the walls.</div>}
+                {!collected && nearPickup && <div style={{ fontSize: '11px', color: '#d9fbff', marginTop: 3 }}>Press F or X to pick up drone</div>}
+                {collected && active && <div style={{ fontSize: '11px', color: '#d9fbff', marginTop: 3 }}>WASD steer, Space up, Shift down, G exit, T thermal {thermalActive ? 'ON' : 'OFF'}</div>}
+                {collected && !active && <div style={{ fontSize: '11px', color: '#d9fbff', marginTop: 3 }}>Press G to enter drone mode</div>}
+                {hint && <div style={{ fontSize: '11px', color: '#ffd1a1', marginTop: 3 }}>{hint}</div>}
+            </div>
+        );
+    };
+    const DroneThermalOverlay = () => {
+        const [active, setActive] = useState(false);
+        const [noiseTick, setNoiseTick] = useState(0);
+
+        useEffect(() => {
+            const sync = () => {
+                setActive(!!window.jackalopesGame?.droneActive && !!window.jackalopesGame?.droneThermalActive);
+            };
+            sync();
+            const handleMode = () => sync();
+            const handleThermal = () => sync();
+            window.addEventListener('droneModeToggled', handleMode as EventListener);
+            window.addEventListener('droneThermalToggled', handleThermal as EventListener);
+            return () => {
+                window.removeEventListener('droneModeToggled', handleMode as EventListener);
+                window.removeEventListener('droneThermalToggled', handleThermal as EventListener);
+            };
+        }, []);
+
+        useEffect(() => {
+            if (!active) {
+                setNoiseTick(0);
+                return;
+            }
+            const interval = window.setInterval(() => setNoiseTick(Date.now()), 70);
+            return () => window.clearInterval(interval);
+        }, [active]);
+
+        if (!active) return null;
+
+        const grainOffsetA = `${(noiseTick * 0.13) % 43}px ${(noiseTick * 0.08) % 31}px`;
+        const grainOffsetB = `${(noiseTick * -0.09) % 37}px ${(noiseTick * 0.16) % 47}px`;
+
+        return (
+            <>
+                <div style={{
+                    position: 'fixed',
+                    inset: 0,
+                    pointerEvents: 'none',
+                    zIndex: 980,
+                    background: 'radial-gradient(circle at center, rgba(255,248,220,0.34) 0%, rgba(255,170,70,0.26) 18%, rgba(255,90,20,0.24) 42%, rgba(80,10,0,0.58) 68%, rgba(6,0,0,0.84) 100%)',
+                    boxShadow: 'inset 0 0 260px rgba(255,120,40,0.34)'
+                }} />
+                <div style={{
+                    position: 'fixed',
+                    inset: 0,
+                    zIndex: 981,
+                    pointerEvents: 'none',
+                    opacity: 0.38,
+                    backgroundImage: `
+                        repeating-linear-gradient(0deg, rgba(255,220,180,0.14) 0px, rgba(255,220,180,0.14) 1px, transparent 1px, transparent 4px),
+                        repeating-linear-gradient(90deg, rgba(255,120,70,0.08) 0px, rgba(255,120,70,0.08) 1px, transparent 1px, transparent 3px),
+                        repeating-linear-gradient(45deg, rgba(255,255,255,0.06) 0px, rgba(255,255,255,0.06) 1px, transparent 1px, transparent 5px)
+                    `,
+                    backgroundSize: '4px 4px, 3px 3px, 5px 5px',
+                    backgroundPosition: `${grainOffsetA}, ${grainOffsetB}, 0px 0px`,
+                    mixBlendMode: 'screen'
+                }} />
+                <div style={{
+                    position: 'fixed',
+                    inset: 0,
+                    pointerEvents: 'none',
+                    zIndex: 982,
+                    background: 'linear-gradient(180deg, rgba(255,210,140,0.12) 0%, rgba(255,110,40,0.06) 32%, rgba(0,0,0,0) 54%, rgba(255,100,40,0.10) 100%)',
+                    mixBlendMode: 'screen'
+                }} />
+                <div style={{
+                    position: 'fixed',
+                    top: '16px',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    pointerEvents: 'none',
+                    zIndex: 983,
+                    color: '#fff0cf',
+                    fontSize: '12px',
+                    letterSpacing: '0.22em',
+                    textTransform: 'uppercase',
+                    background: 'rgba(55, 12, 0, 0.78)',
+                    border: '1px solid rgba(255,180,120,0.54)',
+                    borderRadius: '999px',
+                    padding: '7px 14px',
+                    boxShadow: '0 0 30px rgba(255,120,60,0.32)'
+                }}>Thermal Vision Active [T]</div>
+                <div style={{
+                    position: 'fixed',
+                    left: '50%',
+                    top: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    width: '34px',
+                    height: '34px',
+                    border: '1px solid rgba(255,235,205,0.92)',
+                    borderRadius: '999px',
+                    boxShadow: '0 0 22px rgba(255,150,80,0.55)',
+                    zIndex: 984,
+                    pointerEvents: 'none'
+                }} />
+                <div style={{
+                    position: 'fixed',
+                    left: '50%',
+                    top: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    width: '160px',
+                    height: '1px',
+                    background: 'rgba(255,225,190,0.62)',
+                    zIndex: 984,
+                    pointerEvents: 'none'
+                }} />
+                <div style={{
+                    position: 'fixed',
+                    left: '50%',
+                    top: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    width: '1px',
+                    height: '160px',
+                    background: 'rgba(255,225,190,0.62)',
+                    zIndex: 984,
+                    pointerEvents: 'none'
+                }} />
+            </>
+        );
+    };
+const SoundProcessor = () => {
+    useFrame(() => {
+        soundManager.update();
+    });
+    return null;
+};
+
+const MoonOrbit = ({ moonOrbit, moonOrbitSpeed, directionalDistance, directionalHeight, directionalLightRef }: any) => {
+    const angle = useRef(0);
+    useFrame(() => {
+        if (!moonOrbit || !directionalLightRef.current) return;
+        angle.current += moonOrbitSpeed * 0.005;
+        const xRadius = Math.max(directionalDistance * 2.5, 50);
+        const zRadius = Math.max(directionalDistance * 1.2, 25);
+        const x = Math.sin(angle.current) * xRadius;
+        const z = Math.cos(angle.current) * zRadius;
+        directionalLightRef.current.position.set(x, directionalHeight * 1.2, z);
+        directionalLightRef.current.target.position.set(0, 0, 0);
+    });
+    return null;
+};
+
+const StableLightUpdater = ({ directionalLightRef, directionalHeight, directionalDistance, highQualityShadows }: any) => {
+    useEffect(() => {
+        if (directionalLightRef.current) {
+            directionalLightRef.current.position.set(-directionalDistance, directionalHeight, -directionalDistance);
+            directionalLightRef.current.target.position.set(0, 0, 0);
+            directionalLightRef.current.shadow.bias = -0.001;
+            directionalLightRef.current.shadow.normalBias = 0.05;
+            directionalLightRef.current.shadow.radius = highQualityShadows ? 1 : 2;
+            directionalLightRef.current.shadow.mapSize.width = highQualityShadows ? 2048 : 1024;
+            directionalLightRef.current.shadow.mapSize.height = highQualityShadows ? 2048 : 1024;
+        }
+    }, [directionalHeight, directionalDistance, highQualityShadows, directionalLightRef]);
+    return null;
+};
+
 export function App() {
     // Replace useLoadingAssets with useProgress implementation
     const { active } = useProgress()
     const [loading, setLoading] = useState(true)
+
+    const initialGameMode = useMemo(() => getGameModeFromUrl(), []);
+    const [gameMode, setGameMode] = useState<GameMode | null>(initialGameMode);
+    const [showGameModeMenu, setShowGameModeMenu] = useState(initialGameMode === null);
+    const adventureMode = gameMode === 'adventure';
+    const [lushGrove, setLushGrove] = useState(() => {
+        try { return localStorage.getItem(GROVE_STORAGE_KEY) !== 'off'; } catch { return true; }
+    });
+    const toggleLushGrove = () => setLushGrove(current => !current);
+    useEffect(() => {
+        try { localStorage.setItem(GROVE_STORAGE_KEY, lushGrove ? 'on' : 'off'); } catch { /* Session-only comparison still works. */ }
+    }, [lushGrove]);
+    useEffect(() => {
+        if (!adventureMode) return;
+        const compareGrove = (event: KeyboardEvent) => {
+            const target = event.target as HTMLElement | null;
+            if (event.code !== 'KeyG' || event.repeat || event.ctrlKey || event.metaKey || event.altKey ||
+                target?.isContentEditable || target?.closest('input, textarea, select')) return;
+            event.preventDefault();
+            setLushGrove(current => !current);
+        };
+        window.addEventListener('keydown', compareGrove);
+        return () => window.removeEventListener('keydown', compareGrove);
+    }, [adventureMode]);
 
     // Add state to control Leva panel visibility
     const [levaVisible, setLevaVisible] = useState(false);
@@ -1282,6 +1856,16 @@ export function App() {
     // Add key handler for 'O' key to toggle Leva panel
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'm' || e.key === 'M') {
+                const target = e.target as HTMLElement | null;
+                if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+                    return;
+                }
+                if (document.pointerLockElement) document.exitPointerLock();
+                setShowGameModeMenu(true);
+                return;
+            }
+
             // Toggle Leva panel when O key is pressed
             if (e.key === 'o' || e.key === 'O') {
                 setLevaVisible(prev => !prev);
@@ -1320,6 +1904,39 @@ export function App() {
     const [playerHealth, setPlayerHealth] = useState(100);
     const [goldenEggCount, setGoldenEggCount] = useState(0);
     const [rainbowEggCount, setRainbowEggCount] = useState(0);
+    const [greenNightVisionActive, setGreenNightVisionActive] = useState(false);
+    const [goldenVisionUntil, setGoldenVisionUntil] = useState(0);
+    const [adventureAvatar, setAdventureAvatar] = useState<'jackalope' | 'astronaut'>(() => {
+        try { return localStorage.getItem('jackalopes.adventure-avatar') === 'astronaut' ? 'astronaut' : 'jackalope'; } catch { return 'jackalope'; }
+    });
+    const toggleAdventureAvatar = () => setAdventureAvatar(previous => {
+        if (Date.now() < adventureCombatState.deadUntil) return previous;
+        const next = previous === 'astronaut' ? 'jackalope' : 'astronaut';
+        try { localStorage.setItem('jackalopes.adventure-avatar', next); } catch { /* Session-only selection. */ }
+        return next;
+    });
+    useEffect(() => {
+        const eatKoi = () => { if (adventureMode) setGoldenVisionUntil(Date.now() + GOLDEN_VISION_DURATION_MS); };
+        window.addEventListener('jackalopes:rainbow-koi-eaten', eatKoi);
+        return () => window.removeEventListener('jackalopes:rainbow-koi-eaten', eatKoi);
+    }, [adventureMode]);
+    const goldenVisionActive = adventureMode && goldenVisionUntil > Date.now();
+    useEffect(() => {
+        if (!goldenVisionUntil) return;
+        const timeout = window.setTimeout(() => setGoldenVisionUntil(0), Math.max(0, goldenVisionUntil - Date.now()));
+        return () => window.clearTimeout(timeout);
+    }, [goldenVisionUntil]);
+    useEffect(() => {
+        setGoldenVisionUntil(0);
+        const reset = () => setGoldenVisionUntil(0);
+        window.addEventListener('jackalopesRoundReset', reset);
+        window.addEventListener('player_respawned', reset);
+        return () => {
+            window.removeEventListener('jackalopesRoundReset', reset);
+            window.removeEventListener('player_respawned', reset);
+        };
+    }, [adventureMode]);
+
     const [mercFlashblindUntil, setMercFlashblindUntil] = useState(0);
 
     // Add score state
@@ -1342,8 +1959,9 @@ export function App() {
 
     // Round end handler
     const handleRoundEnd = useCallback(() => {
+        if (adventureMode) return;
         setGameOver(true);
-    }, []);
+    }, [adventureMode]);
 
     // Host tracking for score and timer synchronization
     const [isHost, setIsHost] = useState(false);
@@ -1452,14 +2070,6 @@ export function App() {
     // Add state for the virtual gamepad
     const [showVirtualGamepad, setShowVirtualGamepad] = useState(false);
     const [isMobile, setIsMobile] = useState(false);
-
-    // Current key state tracking for gamepad
-    const currentKeys = useRef<Record<string, boolean>>({
-        'w': false, 's': false, 'a': false, 'd': false, ' ': false
-    });
-
-    // Use a ref to track if shoot is on cooldown
-    const shootCooldownRef = useRef(false);
 
     // Detect mobile devices on component mount
     useEffect(() => {
@@ -1656,6 +2266,7 @@ export function App() {
         setMercsScore(0);
         setGoldenEggCount(0);
         setRainbowEggCount(0);
+        setGreenNightVisionActive(false);
         window.dispatchEvent(new CustomEvent('golden_trail_clear'))
         localStorage.setItem('jackalopes_score', '0');
         localStorage.setItem('mercs_score', '0');
@@ -1665,7 +2276,8 @@ export function App() {
                 type: 'game_event',
                 event: {
                     event_type: 'game_score_update',
-                    source: 'round_reset',
+                    source: 'timer_reset',
+                    reset_time: Date.now(),
                     jackalopesScore: 0,
                     mercsScore: 0,
                     timestamp: Date.now(),
@@ -1882,164 +2494,6 @@ export function App() {
         }
     }, [virtualGamepad, isMobile]);
 
-    // Handle virtual gamepad inputs
-    const handleVirtualMove = (x: number, y: number) => {
-        // Map virtual joystick to keyboard events for WASD movement
-        // Forward/backward (W/S) mapped to Y axis
-        const forwardKey = y < -0.3 ? 'w' : null;
-        const backwardKey = y > 0.3 ? 's' : null;
-
-        // Left/right (A/D) mapped to X axis
-        const leftKey = x < -0.3 ? 'a' : null;
-        const rightKey = x > 0.3 ? 'd' : null;
-
-        // Helper to update key states
-        const updateKey = (key: string | null, isPressed: boolean) => {
-            if (!key) {
-                // Release all keys that might be in this direction
-                if (key === forwardKey) {
-                    if (currentKeys.current['w']) {
-                        window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w', bubbles: true }));
-                        currentKeys.current['w'] = false;
-                    }
-                } else if (key === backwardKey) {
-                    if (currentKeys.current['s']) {
-                        window.dispatchEvent(new KeyboardEvent('keyup', { key: 's', bubbles: true }));
-                        currentKeys.current['s'] = false;
-                    }
-                } else if (key === leftKey) {
-                    if (currentKeys.current['a']) {
-                        window.dispatchEvent(new KeyboardEvent('keyup', { key: 'a', bubbles: true }));
-                        currentKeys.current['a'] = false;
-                    }
-                } else if (key === rightKey) {
-                    if (currentKeys.current['d']) {
-                        window.dispatchEvent(new KeyboardEvent('keyup', { key: 'd', bubbles: true }));
-                        currentKeys.current['d'] = false;
-                    }
-                }
-                return;
-            }
-
-            // Only send event if the state changed
-            if (isPressed && !currentKeys.current[key]) {
-                // Dispatch keydown event
-                window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
-                currentKeys.current[key] = true;
-            } else if (!isPressed && currentKeys.current[key]) {
-                // Dispatch keyup event
-                window.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
-                currentKeys.current[key] = false;
-            }
-        };
-
-        // Update WASD keys based on joystick position
-        updateKey('w', !!forwardKey);
-        updateKey('s', !!backwardKey);
-        updateKey('a', !!leftKey);
-        updateKey('d', !!rightKey);
-
-        // If joystick is released (x and y are 0), release all keys
-        if (Math.abs(x) < 0.1 && Math.abs(y) < 0.1) {
-            if (currentKeys.current['w']) {
-                window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w', bubbles: true }));
-                currentKeys.current['w'] = false;
-            }
-            if (currentKeys.current['s']) {
-                window.dispatchEvent(new KeyboardEvent('keyup', { key: 's', bubbles: true }));
-                currentKeys.current['s'] = false;
-            }
-            if (currentKeys.current['a']) {
-                window.dispatchEvent(new KeyboardEvent('keyup', { key: 'a', bubbles: true }));
-                currentKeys.current['a'] = false;
-            }
-            if (currentKeys.current['d']) {
-                window.dispatchEvent(new KeyboardEvent('keyup', { key: 'd', bubbles: true }));
-                currentKeys.current['d'] = false;
-            }
-        }
-    };
-
-    const handleVirtualJump = () => {
-        console.log("Virtual jump handler triggered!");
-
-        // Prevent repeated keydown events
-        if (!currentKeys.current[' ']) {
-            // Trigger space key for jump
-            const keydownEvent = new KeyboardEvent('keydown', {
-                key: ' ',
-                code: 'Space',
-                bubbles: true,
-                cancelable: true
-            });
-            window.dispatchEvent(keydownEvent);
-            document.dispatchEvent(keydownEvent); // Also dispatch to document in case game is listening there
-            currentKeys.current[' '] = true;
-
-            console.log("Sent jump keydown event (space)");
-
-            // Release key after a short delay
-            setTimeout(() => {
-                const keyupEvent = new KeyboardEvent('keyup', {
-                    key: ' ',
-                    code: 'Space',
-                    bubbles: true,
-                    cancelable: true
-                });
-                window.dispatchEvent(keyupEvent);
-                document.dispatchEvent(keyupEvent); // Also dispatch to document
-                currentKeys.current[' '] = false;
-                console.log("Sent jump keyup event (space)");
-            }, 200);
-        }
-    };
-
-    const handleVirtualShoot = () => {
-        console.log("Virtual shoot handler triggered!");
-
-        // Prevent rapid-fire
-        if (!shootCooldownRef.current) {
-            shootCooldownRef.current = true;
-
-            // Simulate mouse click for shooting
-            const mouseDownEvent = new MouseEvent('mousedown', {
-                bubbles: true,
-                cancelable: true,
-                button: 0, // Left button
-                view: window
-            });
-            document.dispatchEvent(mouseDownEvent);
-            console.log("Sent shoot mousedown event");
-
-            // Also trigger sound directly
-            if (window.__playMercShot) {
-                console.log("Directly triggering weapon sound");
-                window.__playMercShot();
-            } else {
-                console.log("Global weapon sound function not available");
-                // Also dispatch a shotFired event as a fallback
-                window.dispatchEvent(new CustomEvent('shotFired'));
-            }
-
-            // Release after a short delay
-            setTimeout(() => {
-                const mouseUpEvent = new MouseEvent('mouseup', {
-                    bubbles: true,
-                    cancelable: true,
-                    button: 0,
-                    view: window
-                });
-                document.dispatchEvent(mouseUpEvent);
-                console.log("Sent shoot mouseup event");
-
-                // Add cooldown to prevent spamming
-                setTimeout(() => {
-                    shootCooldownRef.current = false;
-                }, 300);
-            }, 100);
-        }
-    };
-
     // Get remote shots from the connection manager (always call the hook to maintain hook order)
     const allRemoteShots = useRemoteShots(connectionManager);
     // Only use the shots when multiplayer is enabled, not affected by UI visibility
@@ -2131,33 +2585,7 @@ export function App() {
         }
     };
 
-    // Simplified StableLightUpdater to just position the light
-    const StableLightUpdater = () => {
-        // Single setup effect rather than frame-by-frame updates for better performance
-        useEffect(() => {
-            if (directionalLightRef.current) {
-                // Set a fixed position for best shadow coverage over the level
-                directionalLightRef.current.position.set(
-                    -directionalDistance,
-                    directionalHeight,
-                    -directionalDistance
-                );
 
-                // Set target to center of level
-                directionalLightRef.current.target.position.set(0, 0, 0);
-                directionalLightRef.current.target.updateMatrixWorld();
-
-                // Optimize shadows
-                directionalLightRef.current.shadow.bias = -0.001;
-                directionalLightRef.current.shadow.normalBias = 0.05;
-                directionalLightRef.current.shadow.radius = highQualityShadows ? 1 : 2; // Softer shadows in low quality mode
-                directionalLightRef.current.shadow.mapSize.width = highQualityShadows ? 2048 : 1024;
-                directionalLightRef.current.shadow.mapSize.height = highQualityShadows ? 2048 : 1024;
-            }
-        }, [directionalHeight, directionalDistance, highQualityShadows]);
-
-        return null;
-    };
 
     // Add this inside the App component
     useEffect(() => {
@@ -2165,44 +2593,14 @@ export function App() {
         console.log(`Character type changed to ${characterType}`);
     }, [characterType]);
 
-    // Add moon orbit component for when orbiting is enabled
-    const MoonOrbit = () => {
-        const angle = useRef(0);
 
-        useFrame(() => {
-            if (!moonOrbit || !directionalLightRef.current) return;
-
-            // Increment angle for orbit - significantly slower
-            angle.current += moonOrbitSpeed * 0.005;
-
-            // Calculate light position in orbit around the center of the level
-            // Using an elliptical orbit to spread on the x-axis
-            const xRadius = Math.max(directionalDistance * 2.5, 50); // Much wider on x-axis
-            const zRadius = Math.max(directionalDistance * 1.2, 25); // Also wider on z-axis
-            const x = Math.sin(angle.current) * xRadius;
-            const z = Math.cos(angle.current) * zRadius;
-
-            // Set light position with higher elevation for more dramatic shadows
-            directionalLightRef.current.position.set(
-                x,
-                directionalHeight * 1.2, // Make it higher for more dramatic shadows
-                z
-            );
-
-            // Update directional light target to focus on level center
-            // This creates more interesting and varied shadows as the moon orbits
-            directionalLightRef.current.target.position.set(0, 0, 0);
-            directionalLightRef.current.target.updateMatrixWorld();
-        });
-
-        return null;
-    };
 
     // Graphics quality settings
     const performanceSettings = useControls('Performance', {
         graphicsQuality: {
             value: 'low' as const, // Changed from 'auto' to 'low'
             label: 'Graphics Quality',
+            transient: false, // Keep the selected quality available to the rendering rig.
             options: ['auto', 'high', 'medium', 'low'] as const,
             onChange: (value: 'auto' | 'high' | 'medium' | 'low') => {
                 // Only included if window.__setGraphicsQuality is defined
@@ -2221,15 +2619,15 @@ export function App() {
     });
 
     // Extract graphicsQuality with proper type assertion
-    const graphicsQuality = (performanceSettings as any)?.graphicsQuality || 'low'; // Changed default fallback from 'auto' to 'low'
+    const graphicsQuality = compatibilityMode ? 'low' : ((performanceSettings as any)?.graphicsQuality || 'low'); // Changed default fallback from 'auto' to 'low'
 
     // Add global rendering quality parameters controlled by graphics quality
     const [globalQualityParams, setGlobalQualityParams] = useState({
-        shadowMapSize: 2048,
-        bloomQuality: 'medium' as 'high' | 'medium' | 'low',
-        effectsEnabled: true,
-        environmentResolution: 64,
-        maxParticles: 10000,
+        shadowMapSize: 512,
+        bloomQuality: 'low' as 'high' | 'medium' | 'low',
+        effectsEnabled: false,
+        environmentResolution: 32,
+        maxParticles: 2000,
         cullingDistance: 100
     });
 
@@ -2343,6 +2741,9 @@ export function App() {
     }, []);
     
     const [playerCharacterInfo, _setPlayerCharacterInfo] = useState<{ type: 'merc' | 'jackalope', thirdPerson: boolean }>(() => {
+        if (initialGameMode === 'adventure') {
+            return { type: 'jackalope', thirdPerson: true };
+        }
         if (urlRole) {
             console.log(`🎮 URL OVERRIDE: role=${urlRole}`);
             return { type: urlRole, thirdPerson: urlRole === 'jackalope' };
@@ -2365,9 +2766,39 @@ export function App() {
         console.log(`\u{1F3AE} setPlayerCharacterInfo: ${info.type} (server=${fromServer})`);
         _setPlayerCharacterInfo(info);
     }, []);
+
+    const selectGameMode = useCallback((nextMode: GameMode) => {
+        if (document.pointerLockElement) document.exitPointerLock();
+
+        const url = new URL(window.location.href);
+        url.searchParams.set('mode', nextMode);
+        if (nextMode === 'adventure') {
+            url.searchParams.delete('role');
+        }
+        window.history.replaceState({}, '', url);
+
+        connectionManager.setGameMode(nextMode);
+        serverAssignedType.current = false;
+
+        const nextType = nextMode === 'adventure' ? 'jackalope' : (urlRole || 'jackalope');
+        _setPlayerCharacterInfo({ type: nextType, thirdPerson: nextType === 'jackalope' });
+        setGameMode(nextMode);
+        setShowGameModeMenu(false);
+        setGameOver(false);
+        setRoundKey(key => key + 1);
+        setJackalopesScore(0);
+        setMercsScore(0);
+
+        window.dispatchEvent(new CustomEvent('jackalopesGameModeChanged', {
+            detail: { mode: nextMode, timestamp: Date.now() }
+        }));
+    }, [connectionManager, urlRole]);
     
     // Server-synced match timer
     const [matchTimerData, setMatchTimerData] = useState<{ matchStartTime: number, matchDuration: number, serverTime: number } | null>(null);
+    const [roundTimeRemaining, setRoundTimeRemaining] = useState(300);
+    const serverClockOffsetRef = useRef<number | null>(null);
+    const clampVisualTimer = useCallback((value: number) => Math.max(240, Math.min(300, value)), []);
 
     // Listen for server-authoritative player type assignment
     useEffect(() => {
@@ -2376,14 +2807,16 @@ export function App() {
         const handleTypeAssigned = (data: { type: string, index: number }) => {
             console.log(`🎮 SERVER ASSIGNED: ${data.type} (index ${data.index})`);
             serverAssignedType.current = true;
+            const assignedType = adventureMode ? 'jackalope' : data.type as 'merc' | 'jackalope';
             setPlayerCharacterInfo({
-                type: data.type as 'merc' | 'jackalope',
-                thirdPerson: data.type === 'jackalope'
+                type: assignedType,
+                thirdPerson: assignedType === 'jackalope'
             }, true);
         };
         
         const handleMatchTimer = (data: { matchStartTime: number, matchDuration: number, serverTime: number }) => {
             console.log('⏱️ Server match timer received:', data);
+            serverClockOffsetRef.current = data.serverTime ? (Date.now() - data.serverTime) : null;
             setMatchTimerData(data);
         };
         
@@ -2393,7 +2826,169 @@ export function App() {
             connectionManager.off('player_type_assigned', handleTypeAssigned);
             connectionManager.off('match_timer', handleMatchTimer);
         };
-    }, [connectionManager, enableMultiplayer]);
+    }, [adventureMode, connectionManager, enableMultiplayer, setPlayerCharacterInfo]);
+
+    useEffect(() => {
+        const applyVisualTimer = (value: number) => {
+            const visualTime = clampVisualTimer(value);
+            setRoundTimeRemaining(prev => prev === visualTime ? prev : visualTime);
+        };
+
+        const computeInitialRemainingTime = () => {
+            if (matchTimerData?.matchStartTime && matchTimerData?.matchDuration) {
+                const clockOffset = serverClockOffsetRef.current ?? 0;
+                const serverNow = Date.now() - clockOffset;
+                const elapsed = Math.floor((serverNow - matchTimerData.matchStartTime) / 1000);
+                applyVisualTimer(Math.max(0, matchTimerData.matchDuration - elapsed));
+                return;
+            }
+
+            try {
+                const savedTime = localStorage.getItem('timer_remaining');
+                const savedTimestamp = localStorage.getItem('timer_timestamp');
+
+                if (savedTime && savedTimestamp) {
+                    const elapsedSeconds = Math.floor((Date.now() - parseInt(savedTimestamp, 10)) / 1000);
+                    const remainingTime = Math.max(0, parseInt(savedTime, 10) - elapsedSeconds);
+                    applyVisualTimer(remainingTime);
+                    return;
+                }
+            } catch (err) {
+                console.error('Error reading round timer for lighting transition:', err);
+            }
+
+            setRoundTimeRemaining(prev => prev === 300 ? prev : 300);
+        };
+
+        const handleFullTimerSync = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (detail?.timeRemaining !== undefined) {
+                applyVisualTimer(detail.timeRemaining);
+            }
+        };
+
+        const handleTimerTick = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (detail?.timeRemaining !== undefined) {
+                applyVisualTimer(detail.timeRemaining);
+            }
+        };
+
+        const handleTimerReset = () => {
+            setRoundTimeRemaining(prev => prev === 300 ? prev : 300);
+        };
+
+        computeInitialRemainingTime();
+        window.addEventListener('host_timer_full_sync', handleFullTimerSync as EventListener);
+        window.addEventListener('jackalopes_timer_tick', handleTimerTick as EventListener);
+        window.addEventListener('timer_reset', handleTimerReset);
+
+        return () => {
+            window.removeEventListener('host_timer_full_sync', handleFullTimerSync as EventListener);
+            window.removeEventListener('jackalopes_timer_tick', handleTimerTick as EventListener);
+            window.removeEventListener('timer_reset', handleTimerReset);
+        };
+    }, [clampVisualTimer, matchTimerData]);
+
+    const introLightingProgress = useMemo(() => {
+        const clampedTime = Math.max(0, Math.min(300, roundTimeRemaining));
+        return THREE.MathUtils.clamp((300 - clampedTime) / 60, 0, 1);
+    }, [roundTimeRemaining]);
+
+    const jackalopeNightVisionActive = greenNightVisionActive && playerCharacterInfo.type === 'jackalope';
+    const NIGHT_VISION_PROGRESS = 0.68;
+    // Exploration stays at an intentional twilight; Hunt keeps its timed darkness.
+    const normalAdventure = adventureMode && !jackalopeNightVisionActive;
+    const visualLightingProgress = jackalopeNightVisionActive ? NIGHT_VISION_PROGRESS : (adventureMode ? 0.42 : introLightingProgress);
+    const nightVisionTintStrength = jackalopeNightVisionActive ? 0.52 : 0;
+
+    const dynamicFogColor = useMemo(() => {
+        if (normalAdventure) return '#142d39';
+        if (!forceDarkLevel) return darkMode ? '#111111' : fogColor;
+        const baseColor = new THREE.Color('#4b3f52').lerp(new THREE.Color('#050a14'), visualLightingProgress);
+        if (!jackalopeNightVisionActive) return `#${baseColor.getHexString()}`;
+        return `#${baseColor.lerp(new THREE.Color('#173624'), nightVisionTintStrength).getHexString()}`;
+    }, [normalAdventure, forceDarkLevel, darkMode, fogColor, jackalopeNightVisionActive, nightVisionTintStrength, visualLightingProgress]);
+
+    const dynamicFogNear = normalAdventure ? 70 : forceDarkLevel
+        ? THREE.MathUtils.lerp(Math.max(0, fogNear * 0.9), fogNear * 0.5, visualLightingProgress)
+        : (darkMode ? fogNear : fogNear);
+
+    const dynamicFogFar = normalAdventure ? 340 : forceDarkLevel
+        ? THREE.MathUtils.lerp(Math.max(fogFar * 0.7, fogNear + 1), fogFar * 0.3, visualLightingProgress)
+        : (darkMode ? (fogFar * 0.5) : fogFar);
+
+    const dynamicEnvironmentPreset = forceDarkLevel && visualLightingProgress < 0.98 ? 'sunset' : (forceDarkLevel ? 'night' : 'sunset');
+    const dynamicEnvironmentBlur = forceDarkLevel
+        ? THREE.MathUtils.lerp(0.28, 0.8, visualLightingProgress)
+        : 0.4;
+
+    const dynamicStarsCount = forceDarkLevel
+        ? Math.round(THREE.MathUtils.lerp(900, 4000, visualLightingProgress))
+        : (darkMode ? Math.min(starsCount * 1.5, 3000) : starsCount);
+
+    const dynamicStarsSize = forceDarkLevel
+        ? THREE.MathUtils.lerp(starsSize * 0.9, starsSize * 1.5, visualLightingProgress)
+        : (darkMode ? starsSize * 1.2 : starsSize);
+
+    const dynamicStarsColor = useMemo(() => {
+        if (!forceDarkLevel) return darkMode ? '#c4e1ff' : starsColor;
+        const baseColor = new THREE.Color('#ffd7a3').lerp(new THREE.Color('#8abbff'), visualLightingProgress);
+        if (!jackalopeNightVisionActive) return `#${baseColor.getHexString()}`;
+        return `#${baseColor.lerp(new THREE.Color('#aaffbb'), 0.55).getHexString()}`;
+    }, [forceDarkLevel, darkMode, starsColor, jackalopeNightVisionActive, visualLightingProgress]);
+
+    const dynamicStarsDepth = forceDarkLevel
+        ? THREE.MathUtils.lerp(95, 150, visualLightingProgress)
+        : (darkMode ? 120 : 100);
+
+    const dynamicAmbientIntensity = normalAdventure ? 0.2 : forceDarkLevel
+        ? THREE.MathUtils.lerp(0.26, 0.005, visualLightingProgress) * (jackalopeNightVisionActive ? 0.12 : 1)
+        : (darkMode ? 0.02 : ambientIntensity);
+
+    const dynamicDirectionalIntensity = normalAdventure ? 1.65 : forceDarkLevel
+        ? THREE.MathUtils.lerp(Math.max(2.8, directionalIntensity * 1.15), 0.02, visualLightingProgress) * (jackalopeNightVisionActive ? 0.11 : 1)
+        : (darkMode ? 0.1 : directionalIntensity);
+
+    const dynamicDirectionalColor = useMemo(() => {
+        if (normalAdventure) return '#efcda5';
+        if (!forceDarkLevel) return '#fff';
+        const baseColor = new THREE.Color('#ffb46b').lerp(new THREE.Color('#5577aa'), visualLightingProgress);
+        if (!jackalopeNightVisionActive) return `#${baseColor.getHexString()}`;
+        return `#${baseColor.lerp(new THREE.Color('#9eff9f'), 0.7).getHexString()}`;
+    }, [normalAdventure, forceDarkLevel, jackalopeNightVisionActive, visualLightingProgress]);
+
+    const dynamicBloomIntensity = normalAdventure ? 0.3 : forceDarkLevel
+        ? THREE.MathUtils.lerp(bloomIntensity * 0.9, bloomIntensity * 4.0, visualLightingProgress) * (jackalopeNightVisionActive ? 0.08 : 1)
+        : (darkMode ? bloomIntensity * 2.0 : bloomIntensity);
+
+    const dynamicBloomThreshold = normalAdventure ? 0.8 : forceDarkLevel
+        ? THREE.MathUtils.lerp(0.18, 0.01, visualLightingProgress)
+        : (darkMode ? 0.03 : bloomLuminanceThreshold);
+
+    const dynamicBloomSmoothing = forceDarkLevel
+        ? THREE.MathUtils.lerp(0.85, 0.5, visualLightingProgress)
+        : (darkMode ? 0.7 : 0.9);
+
+    const dynamicVignetteOffset = normalAdventure ? 0.35 : forceDarkLevel
+        ? THREE.MathUtils.lerp(0.28, 0.0, visualLightingProgress)
+        : (darkMode ? 0.1 : vignetteOffset);
+
+    const dynamicVignetteDarkness = normalAdventure ? 0.32 : forceDarkLevel
+        ? THREE.MathUtils.lerp(0.24, 0.98, visualLightingProgress) + (jackalopeNightVisionActive ? 0.18 : 0)
+        : (darkMode ? 0.95 : vignetteDarkness);
+
+    const dynamicChromaticAberration = normalAdventure ? 0.0002 : forceDarkLevel
+        ? THREE.MathUtils.lerp(chromaticAberrationOffset * 0.75, chromaticAberrationOffset * 2, visualLightingProgress) * (jackalopeNightVisionActive ? 0.6 : 1)
+        : chromaticAberrationOffset;
+
+    const dynamicBrightness = normalAdventure ? -0.035 : forceDarkLevel
+        ? THREE.MathUtils.lerp(0.02, -0.95, visualLightingProgress) - (jackalopeNightVisionActive ? 0.52 : 0)
+        : (darkMode ? -0.9 : brightness);
+
+    const dynamicContrast = normalAdventure ? 0.1 : forceDarkLevel
+        ? THREE.MathUtils.lerp(0.02, 0.6, visualLightingProgress) + (jackalopeNightVisionActive ? 0.08 : 0)
+        : (darkMode ? 0.4 : contrast);
 
     // Non-multiplayer: sync characterType from Leva controls
     useEffect(() => {
@@ -2556,7 +3151,10 @@ export function App() {
         }
 
         // Update player type in global state
-        window.jackalopesGame.playerType = enableMultiplayer
+        window.jackalopesGame.gameMode = gameMode || undefined;
+        window.jackalopesGame.playerType = adventureMode
+            ? 'jackalope'
+            : enableMultiplayer
             ? playerCharacterInfo.type
             : (thirdPersonView ? 'jackalope' : 'merc');
 
@@ -2565,8 +3163,9 @@ export function App() {
         return () => {
             // Cleanup
             delete window.jackalopesGame?.playerType;
+            delete window.jackalopesGame?.gameMode;
         };
-    }, [enableMultiplayer, playerCharacterInfo.type, thirdPersonView]);
+    }, [adventureMode, enableMultiplayer, gameMode, playerCharacterInfo.type, thirdPersonView]);
 
     // Enhanced Leva panel toggle detection
     useEffect(() => {
@@ -2722,7 +3321,10 @@ export function App() {
         }
 
         // Update player type in global state
-        window.jackalopesGame.playerType = enableMultiplayer
+        window.jackalopesGame.gameMode = gameMode || undefined;
+        window.jackalopesGame.playerType = adventureMode
+            ? 'jackalope'
+            : enableMultiplayer
             ? playerCharacterInfo.type
             : (thirdPersonView ? 'jackalope' : 'merc');
 
@@ -2731,8 +3333,9 @@ export function App() {
         return () => {
             // Cleanup
             delete window.jackalopesGame?.playerType;
+            delete window.jackalopesGame?.gameMode;
         };
-    }, [enableMultiplayer, playerCharacterInfo.type, thirdPersonView]);
+    }, [adventureMode, enableMultiplayer, gameMode, playerCharacterInfo.type, thirdPersonView]);
 
     // Jackalope icon SVG component
     const JackalopeIcon: React.FC<{ size?: number; opacity?: number }> = ({ size = 24, opacity = 0.9 }) => (
@@ -2818,94 +3421,6 @@ export function App() {
         );
     };
 
-    // Create a new component for the flashlight UI indicator
-    const FlashlightUI = () => {
-        const [isOn, setIsOn] = useState(false);
-        const [visible, setVisible] = useState(false);
-        const [collected, setCollected] = useState(false);
-        const [hint, setHint] = useState('');
-        const [nearPickup, setNearPickup] = useState(false);
-
-        useEffect(() => {
-            if (window.jackalopesGame?.flashlightOn !== undefined) {
-                setIsOn(window.jackalopesGame.flashlightOn);
-            }
-            setCollected(!!window.jackalopesGame?.flashlightCollected);
-            setVisible(window.jackalopesGame?.playerType === 'merc');
-
-            const handleFlashlightToggle = (event: CustomEvent<{isOn: boolean}>) => {
-                setIsOn(event.detail.isOn);
-            };
-
-            const handlePlayerTypeChange = () => {
-                setVisible(window.jackalopesGame?.playerType === 'merc');
-            };
-
-            const handlePickupChanged = (event: CustomEvent<{collected: boolean}>) => {
-                setCollected(event.detail.collected);
-                if (!event.detail.collected) {
-                    setIsOn(false);
-                }
-            };
-
-            const handleBlocked = () => {
-                setHint('Find the flashlight first');
-                window.setTimeout(() => setHint(''), 1400);
-            };
-
-            const handlePickupNearby = (event: CustomEvent<{nearby: boolean, playerType?: string}>) => {
-                const isMercNearby = event.detail.playerType === 'merc' || event.detail.playerType === undefined;
-                setNearPickup(isMercNearby && event.detail.nearby);
-            };
-
-            window.addEventListener('flashlightToggled', handleFlashlightToggle as EventListener);
-            window.addEventListener('playerTypeChanged', handlePlayerTypeChange);
-            window.addEventListener('flashlightPickupChanged', handlePickupChanged as EventListener);
-            window.addEventListener('flashlightToggleBlocked', handleBlocked as EventListener);
-            window.addEventListener('flashlightPickupNearby', handlePickupNearby as EventListener);
-
-            return () => {
-                window.removeEventListener('flashlightToggled', handleFlashlightToggle as EventListener);
-                window.removeEventListener('playerTypeChanged', handlePlayerTypeChange);
-                window.removeEventListener('flashlightPickupChanged', handlePickupChanged as EventListener);
-                window.removeEventListener('flashlightToggleBlocked', handleBlocked as EventListener);
-                window.removeEventListener('flashlightPickupNearby', handlePickupNearby as EventListener);
-            };
-        }, []);
-
-        if (!visible) return null;
-
-        const label = collected ? `Flashlight: ${isOn ? 'ON' : 'OFF'} [F]` : 'Objective: Find the flashlight';
-        const backgroundColor = collected
-            ? (isOn ? 'rgba(255, 255, 0, 0.3)' : 'rgba(100, 100, 100, 0.3)')
-            : 'rgba(255, 214, 102, 0.18)';
-        const color = collected ? (isOn ? '#ffff00' : '#aaaaaa') : '#ffe08a';
-        const border = collected ? `1px solid ${isOn ? '#ffff00' : '#666666'}` : '1px solid rgba(255, 224, 138, 0.55)';
-
-        return (
-            <div style={{
-                position: 'absolute',
-                bottom: '20px',
-                left: '20px',
-                padding: '6px 11px',
-                backgroundColor,
-                color,
-                border,
-                borderRadius: '4px',
-                pointerEvents: 'none',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                userSelect: 'none',
-                zIndex: 1000
-            }}>
-                <div>{label}</div>
-                {!collected && !nearPickup && <div style={{ fontSize: '11px', opacity: 0.85, marginTop: 3 }}>It now spawns inside the walls, closer to center.</div>}
-                {!collected && nearPickup && <div style={{ fontSize: '11px', color: '#fff3b0', marginTop: 3 }}>Press F to pick up flashlight</div>}
-                {hint && <div style={{ fontSize: '11px', color: '#ffd1a1', marginTop: 3 }}>{hint}</div>}
-            </div>
-        );
-    };
-
     // Add effect to handle health test (pressing 'H' key reduces health)
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -2923,6 +3438,19 @@ export function App() {
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, []);
+
+    useEffect(() => {
+        const resetGreenNightVision = () => {
+            setGreenNightVisionActive(false)
+        }
+
+        window.addEventListener('timer_reset', resetGreenNightVision)
+        window.addEventListener('jackalopesRoundReset', resetGreenNightVision)
+        return () => {
+            window.removeEventListener('timer_reset', resetGreenNightVision)
+            window.removeEventListener('jackalopesRoundReset', resetGreenNightVision)
+        }
+    }, [])
 
     // Rainbow egg flashbang ability
     useEffect(() => {
@@ -3033,15 +3561,7 @@ export function App() {
         };
     }, [debugSettings?.debugLevel]);
 
-    // Add a frame processor component to handle sound updates
-    const SoundProcessor = () => {
-        useFrame(() => {
-            // Update sound positions based on entity positions
-            soundManager.update();
-        });
 
-        return null;
-    };
 
     useEffect(() => {
         // Initialize the global game object with default settings
@@ -3318,6 +3838,13 @@ export function App() {
               setMercsScore(0);
               localStorage.setItem('jackalopes_score', '0');
               localStorage.setItem('mercs_score', '0');
+              window.dispatchEvent(new CustomEvent('jackalopesRoundReset', {
+                detail: {
+                  id: event.shotId || `round-reset-${Date.now()}`,
+                  timestamp: event.reset_time || event.timestamp || Date.now(),
+                  source: 'network_timer_reset'
+                }
+              }));
             } else {
               console.log('📊 Ignoring old timer reset event');
             }
@@ -3434,6 +3961,13 @@ export function App() {
             setMercsScore(0);
             localStorage.setItem('jackalopes_score', '0');
             localStorage.setItem('mercs_score', '0');
+            window.dispatchEvent(new CustomEvent('jackalopesRoundReset', {
+              detail: {
+                id: event.shotId || `round-reset-${Date.now()}`,
+                timestamp: event.reset_time || event.timestamp || Date.now(),
+                source: 'window_timer_reset'
+              }
+            }));
           } else {
             console.log('📊 Ignoring old timer reset window event');
           }
@@ -3881,14 +4415,22 @@ export function App() {
 
     // Make game properties accessible globally
     window.jackalopesGame = {
-        playerType: playerCharacterInfo.type,
+        gameMode: gameMode || undefined,
+        playerType: adventureMode ? 'jackalope' : playerCharacterInfo.type,
         levaPanelState: 'closed',
         flashlightOn: false,
         flashlightCollected: false,
+        droneCollected: window.jackalopesGame?.droneCollected || false,
+        droneActive: window.jackalopesGame?.droneActive || false,
+        dronePickupNearby: window.jackalopesGame?.dronePickupNearby || false,
+        dronePosition: window.jackalopesGame?.dronePosition,
+        droneRotation: window.jackalopesGame?.droneRotation,
+        droneThermalActive: window.jackalopesGame?.droneThermalActive || false,
         debugLevel: 1,
         inventory: {
             goldenEggs: goldenEggCount,
             rainbowEggs: rainbowEggCount,
+            greenNightVision: greenNightVisionActive,
         }
     } as any; // Use type assertion to bypass type check
 
@@ -3960,6 +4502,24 @@ export function App() {
         };
     }, [connectionManager]);
 
+    useEffect(() => {
+        const forwardRoundReset = (e: Event) => {
+            const detail = (e as CustomEvent).detail || {};
+            window.dispatchEvent(new CustomEvent('jackalopesRoundReset', {
+                detail: {
+                    ...detail,
+                    timestamp: detail.timestamp || Date.now(),
+                    source: detail.source || 'local_timer_reset'
+                }
+            }));
+        };
+
+        window.addEventListener('timer_reset', forwardRoundReset as EventListener);
+        return () => {
+            window.removeEventListener('timer_reset', forwardRoundReset as EventListener);
+        };
+    }, []);
+
     // Add effect to show intro screen when player type changes
     useEffect(() => {
         // Check if we've already shown the intro for this player type
@@ -4028,56 +4588,59 @@ export function App() {
             {/* Remove model tester component */}
             {/* {showModelTester && <ModelTester />} */}
 
-            <Canvas>
-                {fogEnabled && <fog attach="fog" args={[forceDarkLevel ? '#050a14' : (darkMode ? '#111111' : fogColor), forceDarkLevel ? fogNear * 0.5 : fogNear, forceDarkLevel ? (fogFar * 0.3) : (darkMode ? (fogFar * 0.5) : fogFar)]} />}
-                <Environment
-                    preset={forceDarkLevel ? "night" : "sunset"}
-                    background
-                    blur={forceDarkLevel ? 0.8 : 0.4} // Increased blur for dark level
+            <Canvas shadows={adventureMode && graphicsQuality !== 'low'} dpr={graphicsQuality === 'low' ? 1 : [1, 1.5]} gl={{ antialias: graphicsQuality !== 'low', powerPreference: 'default' }}>
+                {fogEnabled && <fog attach="fog" args={[dynamicFogColor, dynamicFogNear, dynamicFogFar]} />}
+                {!compatibilityMode && <Environment
+                    preset={adventureMode ? 'night' : dynamicEnvironmentPreset}
+                    background={!adventureMode}
+                    blur={dynamicEnvironmentBlur}
                     resolution={globalQualityParams.environmentResolution} // Use quality-based resolution
-                />
+                />}
+
+                {adventureMode && <AdventureAtmosphere motes={graphicsQuality !== 'low'} />}
+                {adventureMode && <AdventureLighting lightRef={directionalLightRef} nightVision={jackalopeNightVisionActive} />}
 
                 {/* Add stars to night sky */}
                 {(starsEnabled || darkMode || forceDarkLevel) && <Stars
-                    count={forceDarkLevel ? 4000 : (darkMode ? Math.min(starsCount * 1.5, 3000) : starsCount)}
-                    size={forceDarkLevel ? starsSize * 1.5 : (darkMode ? starsSize * 1.2 : starsSize)}
-                    color={forceDarkLevel ? "#8abbff" : (darkMode ? "#c4e1ff" : starsColor)}
+                    count={adventureMode ? 260 : dynamicStarsCount}
+                    size={adventureMode ? 0.09 : dynamicStarsSize}
+                    color={adventureMode ? '#b5cbd8' : dynamicStarsColor}
                     twinkle={starsTwinkle}
-                    depth={forceDarkLevel ? 150 : (darkMode ? 120 : 100)} // Even deeper stars in force dark level
+                    depth={dynamicStarsDepth}
                 />}
 
                 {/* Add Stats Collector - must be inside Canvas */}
                 <StatsCollector />
 
-                <ambientLight intensity={forceDarkLevel ? 0.005 : (darkMode ? 0.02 : ambientIntensity)} />
+                <ambientLight intensity={dynamicAmbientIntensity} />
                 <directionalLight
                     castShadow
                     position={[-directionalDistance, directionalHeight, -directionalDistance]}
                     ref={directionalLightRef}
-                    intensity={forceDarkLevel ? 0.02 : (darkMode ? 0.1 : directionalIntensity)}
+                    intensity={dynamicDirectionalIntensity}
                     shadow-mapSize={[globalQualityParams.shadowMapSize, globalQualityParams.shadowMapSize]}
-                    shadow-camera-left={-80}
-                    shadow-camera-right={80}
-                    shadow-camera-top={80}
-                    shadow-camera-bottom={-80}
+                    shadow-camera-left={adventureMode ? -60 : -80}
+                    shadow-camera-right={adventureMode ? 60 : 80}
+                    shadow-camera-top={adventureMode ? 60 : 80}
+                    shadow-camera-bottom={adventureMode ? -60 : -80}
                     shadow-camera-near={1}
                     shadow-camera-far={400}
-                    shadow-bias={-0.001}
-                    shadow-normalBias={0.05}
+                    shadow-bias={adventureMode ? -0.00025 : -0.001}
+                    shadow-normalBias={adventureMode ? 0.12 : 0.05}
                     shadow-radius={highQualityShadows ? 1 : 2} // Softer shadows in low quality mode
-                    color={forceDarkLevel ? "#5577aa" : "#fff"} // Bluish tint for dark level mode
+                    color={dynamicDirectionalColor}
                 />
 
                 {/* Only show moon if visibility is enabled */}
-                {moonVisible && moonOrbit && <Moon
+                {!adventureMode && moonVisible && moonOrbit && <Moon
                     orbitRadius={Math.max(directionalDistance, 50)}
                     height={directionalHeight + 10}
                     orbitSpeed={moonOrbitSpeed}
                 />}
 
                 {/* Add MultiplayerSyncManager when multiplayer is enabled */}
-                {enableMultiplayer && connectionManager && (
-                    <MultiplayerSyncManager connectionManager={connectionManager} />
+                {enableMultiplayer && connectionManager && gameMode && (
+                    <MultiplayerSyncManager key={gameMode} connectionManager={connectionManager} />
                 )}
 
                 {/* Screen shake effect */}
@@ -4086,19 +4649,19 @@ export function App() {
                 <Physics
                     debug={false}
                     paused={loading}
-                    timeStep={1/240} // Increased physics rate to 240Hz for smoother movement
+                    timeStep={1/120}
                     interpolate={true}
                     gravity={[0, -9.81, 0]}>
-                    <PlayerControls thirdPersonView={enableMultiplayer ? playerCharacterInfo.thirdPerson : thirdPersonView}>
+                    <PlayerControls thirdPersonView={adventureMode || (enableMultiplayer ? playerCharacterInfo.thirdPerson : thirdPersonView)}>
                         {/* Conditionally render either the Player (merc) or Jackalope */}
                         {enableMultiplayer ? (
-                            playerCharacterInfo.type === 'merc' ? (
+                            !adventureMode && playerCharacterInfo.type === 'merc' ? (
                                 <>
                                     <Player
                                         ref={playerRef}
                                         position={[10, 7, 10]}
-                                        walkSpeed={0.02}
-                                        runSpeed={0.025}
+                                        walkSpeed={0.03}
+                                        runSpeed={0.0375}
                                         jumpForce={jumpForce * 0.7}
                                         visible={playerCharacterInfo.thirdPerson}
                                         thirdPersonView={playerCharacterInfo.thirdPerson}
@@ -4109,13 +4672,6 @@ export function App() {
                                             if (playerPosition.current) {
                                                 playerPosition.current.copy(position);
                                             }
-                                            if (directionalLightRef.current && !playerCharacterInfo.thirdPerson) {
-                                                const light = directionalLightRef.current;
-                                                light.position.x = position.x + directionalDistance;
-                                                light.position.z = position.z + directionalDistance;
-                                                light.target.position.copy(position);
-                                                light.target.updateMatrixWorld();
-                                            }
                                         }}
                                     />
                                     <FlashlightPickup
@@ -4123,9 +4679,13 @@ export function App() {
                                         enabled={playerCharacterInfo.type === 'merc'}
                                         connectionManager={connectionManager}
                                     />
+                                    <DronePickup enabled={playerCharacterInfo.type === 'merc'} />
+                                    <MercDrone enabled={playerCharacterInfo.type === 'merc'} />
                                 </>
                             ) : (
                                 <Jackalope
+                                    adventureMode={adventureMode}
+                                    adventureAvatar={adventureAvatar}
                                     ref={playerRef}
                                     position={[-100, 7, 10]}
                                     walkSpeed={0.56}
@@ -4139,38 +4699,25 @@ export function App() {
                                         if (playerPosition.current) {
                                             playerPosition.current.copy(position);
                                         }
-                                        if (directionalLightRef.current && !playerCharacterInfo.thirdPerson) {
-                                            const light = directionalLightRef.current;
-                                            light.position.x = position.x + directionalDistance;
-                                            light.position.z = position.z + directionalDistance;
-                                            light.target.position.copy(position);
-                                            light.target.updateMatrixWorld();
-                                        }
                                     }}
                                 />
                             )
                         ) : (
-                            characterType === 'merc' ? (
+                            !adventureMode && characterType === 'merc' ? (
                                 <>
                                     <Player
                                         ref={playerRef}
                                         position={[10, 7, 10]}
-                                        walkSpeed={0.02}
-                                        runSpeed={0.025}
+                                        walkSpeed={0.03}
+                                        runSpeed={0.0375}
                                         jumpForce={jumpForce * 0.7}
                                         visible={thirdPersonView}
                                         thirdPersonView={thirdPersonView}
                                         playerType={characterType}
                                         connectionManager={enableMultiplayer ? connectionManager : undefined}
                                         onMove={(position) => {
-                                            if (directionalLightRef.current && !thirdPersonView) {
-                                                // Only update light directly in first-person mode
-                                                // In third-person, StableLightUpdater handles it
-                                                const light = directionalLightRef.current;
-                                                light.position.x = position.x + directionalDistance;
-                                                light.position.z = position.z + directionalDistance;
-                                                light.target.position.copy(position);
-                                                light.target.updateMatrixWorld();
+                                            if (playerPosition.current) {
+                                                playerPosition.current.copy(position);
                                             }
                                         }}
                                     />
@@ -4179,33 +4726,36 @@ export function App() {
                                         enabled={characterType === 'merc'}
                                         connectionManager={connectionManager}
                                     />
+                                    <DronePickup enabled={characterType === 'merc'} />
+                                    <MercDrone enabled={characterType === 'merc'} />
                                 </>
                             ) : (
                                 <Jackalope
+                                    adventureMode={adventureMode}
+                                    adventureAvatar={adventureAvatar}
                                     ref={playerRef}
                                     position={[-100, 7, 10]} // Different spawn position for jackalope
                                     walkSpeed={0.56}
                                     runSpeed={1.0}
                                     jumpForce={jumpForce * 0.8}
-                                    visible={thirdPersonView}
-                                    thirdPersonView={thirdPersonView}
+                                    visible={adventureMode || thirdPersonView}
+                                    thirdPersonView={adventureMode || thirdPersonView}
                                     connectionManager={enableMultiplayer ? connectionManager : undefined}
                                     onMove={(position) => {
-                                        if (directionalLightRef.current && !thirdPersonView) {
-                                            // Only update light directly in first-person mode
-                                            // In third-person, StableLightUpdater handles it
-                                            const light = directionalLightRef.current;
-                                            light.position.x = position.x + directionalDistance;
-                                            light.position.z = position.z + directionalDistance;
-                                            light.target.position.copy(position);
-                                            light.target.updateMatrixWorld();
+                                        if (playerPosition.current) {
+                                            playerPosition.current.copy(position);
                                         }
                                     }}
                                 />
                             )
                         )}
                     </PlayerControls>
-                    <Platforms />
+                    {adventureMode && <AdventureCombat connectionManager={connectionManager} astronaut={adventureAvatar === 'astronaut'} playerRef={playerRef} />}
+                    <Platforms adventureStyle={adventureMode} holographicVision={goldenVisionActive} />
+                    {adventureMode && lushGrove && !compatibilityMode && <FoliageGrove quality={graphicsQuality} />}
+                    <HolographicVision active={goldenVisionActive} />
+                    {adventureMode && <GoldenMushroom onEat={() => setGoldenVisionUntil(Date.now() + GOLDEN_VISION_DURATION_MS)} />}
+                    {adventureMode && <CloudPath />}
 
                     {/* Mushroom field - visible to all players, but only jackalopes can eat them */}
                     <MushroomField
@@ -4236,34 +4786,42 @@ export function App() {
                         }}
                     />
 
-                    <Scene playerRef={playerRef} />
+                    <GreenEggField
+                        eggCount={3}
+                        onEggEaten={(id) => {
+                            console.log(`[APP] Green egg ${id} was eaten!`)
+                            setGreenNightVisionActive(true)
+                        }}
+                    />
 
-                    {/* Show SphereTool only for merc character - jackalobes don't shoot */}
-                    {(enableMultiplayer ? playerCharacterInfo.type === 'merc' : characterType === 'merc') && (
-                        <SphereTool
-                            onShoot={enableMultiplayer ?
-                                (origin, direction) => {
-                                    console.log('App: onShoot called with', { origin, direction });
-                                    try {
-                                        connectionManager.sendShootEvent(origin, direction);
-                                        console.log('App: successfully sent shoot event');
-                                    } catch (error) {
-                                        console.error('App: error sending shoot event:', error);
-                                    }
+                    <Scene playerRef={playerRef} enabled={!adventureMode} />
+
+                    {/* Adventure has no weapon/projectile layer; Hunt keeps the original shooting system. */}
+                    {!adventureMode && <SphereTool
+                        onShoot={((enableMultiplayer ? playerCharacterInfo.type === 'merc' : characterType === 'merc')) ?
+                            ((origin, direction) => {
+                                console.log('App: onShoot called with', { origin, direction });
+                                try {
+                                    connectionManager.sendShootEvent(origin, direction);
+                                    console.log('App: successfully sent shoot event');
+                                } catch (error) {
+                                    console.error('App: error sending shoot event:', error);
                                 }
-                                : undefined
-                            }
-                            remoteShots={remoteShots}
-                            thirdPersonView={enableMultiplayer ? playerCharacterInfo.thirdPerson : thirdPersonView}
-                            playerPosition={enableMultiplayer ?
-                                (playerCharacterInfo.thirdPerson ? playerPosition.current : null) :
-                                (thirdPersonView ? playerPosition.current : null)}
-                        />
-                    )}
+                            })
+                            : undefined
+                        }
+                        remoteShots={remoteShots}
+                        thirdPersonView={enableMultiplayer ? playerCharacterInfo.thirdPerson : thirdPersonView}
+                        playerPosition={enableMultiplayer ?
+                            (playerCharacterInfo.thirdPerson ? playerPosition.current : null) :
+                            (thirdPersonView ? playerPosition.current : null)}
+                        allowLocalShooting={enableMultiplayer ? playerCharacterInfo.type === 'merc' : characterType === 'merc'}
+                    />}
 
                     {/* Use enableMultiplayer instead of showMultiplayerTools for the actual multiplayer functionality */}
-                    {enableMultiplayer && playerRefReady && (
+                    {enableMultiplayer && playerRefReady && gameMode && (
                         <MultiplayerManager
+                            key={gameMode}
                             localPlayerRef={playerRef}
                             connectionManager={connectionManager}
                         />
@@ -4272,7 +4830,7 @@ export function App() {
 
                 {/* Only use this fallback camera when NO player FPS camera is active */}
                 <PerspectiveCamera
-                    makeDefault={enableMultiplayer ? false : !thirdPersonView}
+                    makeDefault={!adventureMode && (enableMultiplayer ? false : !thirdPersonView)}
                     position={[0, 10, 10]}
                     rotation={[0, 0, 0]}
                     near={0.1}
@@ -4281,7 +4839,7 @@ export function App() {
                 />
 
                 {/* Add third-person camera when needed */}
-                {(enableMultiplayer ? playerCharacterInfo.thirdPerson : thirdPersonView) && (
+                {(adventureMode || (enableMultiplayer ? playerCharacterInfo.thirdPerson : thirdPersonView)) && (
                     <PerspectiveCamera
                         ref={thirdPersonCameraRef}
                         makeDefault
@@ -4293,11 +4851,13 @@ export function App() {
                 )}
 
                 {/* Add simplified ThirdPersonCameraControls */}
-                {(enableMultiplayer ? playerCharacterInfo.thirdPerson : thirdPersonView) && playerPosition.current && (
+                {(adventureMode || (enableMultiplayer ? playerCharacterInfo.thirdPerson : thirdPersonView)) && playerPosition.current && (
                     <ThirdPersonCameraControls
+                        adventureCaves={adventureMode}
+                        shoulderView={adventureMode && adventureAvatar === 'astronaut'}
                         player={playerPosition.current}
                         cameraRef={thirdPersonCameraRef}
-                        enabled={enableMultiplayer ? playerCharacterInfo.thirdPerson : thirdPersonView}
+                        enabled={adventureMode || (enableMultiplayer ? playerCharacterInfo.thirdPerson : thirdPersonView)}
                         distance={cameraDistance}
                         height={cameraHeight}
                         invertY={invertYAxis}
@@ -4305,16 +4865,27 @@ export function App() {
                 )}
 
                 {/* Simplified - just add StableLightUpdater once */}
-                <StableLightUpdater />
+                {!adventureMode && <StableLightUpdater
+                    directionalLightRef={directionalLightRef}
+                    directionalHeight={directionalHeight}
+                    directionalDistance={directionalDistance}
+                    highQualityShadows={highQualityShadows}
+                />}
 
                 {/* Add position tracker component */}
                 <PlayerPositionTracker playerRef={playerRef} playerPosition={playerPosition} />
 
                 {/* Add MoonOrbit component if orbiting is enabled */}
-                {moonOrbit && <MoonOrbit />}
+                {!adventureMode && moonOrbit && <MoonOrbit
+                    moonOrbit={moonOrbit}
+                    moonOrbitSpeed={moonOrbitSpeed}
+                    directionalDistance={directionalDistance}
+                    directionalHeight={directionalHeight}
+                    directionalLightRef={directionalLightRef}
+                />}
 
                 {/* Add WeaponSoundEffects component if player is merc */}
-                {(enableMultiplayer ? playerCharacterInfo.type === 'merc' : characterType === 'merc') && (
+                {!adventureMode && (enableMultiplayer ? playerCharacterInfo.type === 'merc' : characterType === 'merc') && (
                     <WeaponSoundEffects />
                 )}
 
@@ -4322,32 +4893,32 @@ export function App() {
                     <EffectComposer>
                         {bloomEnabled ? (
                             <Bloom
-                                intensity={forceDarkLevel ? bloomIntensity * 4.0 : (darkMode ? bloomIntensity * 2.0 : bloomIntensity)}
-                                luminanceThreshold={forceDarkLevel ? 0.01 : (darkMode ? 0.03 : bloomLuminanceThreshold)}
-                                luminanceSmoothing={forceDarkLevel ? 0.5 : (darkMode ? 0.7 : 0.9)}
+                                intensity={goldenVisionActive ? 0.9 : dynamicBloomIntensity}
+                                luminanceThreshold={goldenVisionActive ? 0.45 : dynamicBloomThreshold}
+                                luminanceSmoothing={dynamicBloomSmoothing}
                                 mipmapBlur={globalQualityParams.bloomQuality !== 'low'}
                             />
                         ) : <></>}
                         <Vignette
-                            offset={vignetteEnabled ? (forceDarkLevel ? 0.0 : (darkMode ? 0.1 : vignetteOffset)) : 0}
-                            darkness={vignetteEnabled ? (forceDarkLevel ? 0.98 : (darkMode ? 0.95 : vignetteDarkness)) : 0}
+                            offset={vignetteEnabled ? dynamicVignetteOffset : 0}
+                            darkness={vignetteEnabled ? (goldenVisionActive ? 0.4 : dynamicVignetteDarkness) : 0}
                             eskil={false}
                         />
                         <ChromaticAberration
                             offset={new THREE.Vector2(
-                                chromaticAberrationEnabled ? (forceDarkLevel ? chromaticAberrationOffset * 2 : chromaticAberrationOffset) : 0,
-                                chromaticAberrationEnabled ? (forceDarkLevel ? chromaticAberrationOffset * 2 : chromaticAberrationOffset) : 0
+                                chromaticAberrationEnabled ? dynamicChromaticAberration : 0,
+                                chromaticAberrationEnabled ? dynamicChromaticAberration : 0
                             )}
                             radialModulation={false}
                             modulationOffset={0}
                         />
                         <BrightnessContrast
-                            brightness={brightnessContrastEnabled ? (forceDarkLevel ? -0.95 : (darkMode ? -0.9 : brightness)) : 0}
-                            contrast={brightnessContrastEnabled ? (forceDarkLevel ? 0.6 : (darkMode ? 0.4 : contrast)) : 0}
+                            brightness={brightnessContrastEnabled ? (goldenVisionActive ? -0.08 : dynamicBrightness) : 0}
+                            contrast={brightnessContrastEnabled ? (goldenVisionActive ? 0.12 : dynamicContrast) : 0}
                         />
                         <ToneMapping
                             blendFunction={BlendFunction.NORMAL}
-                            mode={toneMapping}
+                            mode={adventureMode ? ToneMappingMode.ACES_FILMIC : toneMapping}
                         />
                     </EffectComposer>
                 )}
@@ -4453,30 +5024,13 @@ export function App() {
                 />
             )}
 
+            {adventureMode && adventureAvatar === 'astronaut' && <div aria-hidden="true" style={{ position: 'fixed', left: '50%', top: '50%', width: 5, height: 5, marginLeft: -2, marginTop: -2, borderRadius: '50%', border: '1px solid #ffe5b4', background: '#ffac6355', pointerEvents: 'none', zIndex: 1000 }} />}
             {/* Add Virtual Gamepad */}
             <VirtualGamepad
-                visible={showVirtualGamepad}
-                onMove={handleVirtualMove}
-                onJump={handleVirtualJump}
-                onShoot={handleVirtualShoot}
+                adventureWeapon={adventureMode && adventureAvatar === 'astronaut'}
+                visible={showVirtualGamepad && !!gameMode && !showGameModeMenu}
+                playerType={adventureMode ? 'jackalope' : playerCharacterInfo.type}
             />
-
-            {/* Mobile detected indicator */}
-            {isMobile && (
-                <div style={{
-                    position: 'fixed',
-                    top: '10px',
-                    left: '10px',
-                    background: 'rgba(0,0,0,0.5)',
-                    color: 'white',
-                    padding: '5px 8px',
-                    borderRadius: '4px',
-                    fontSize: '12px',
-                    zIndex: 1000
-                }}>
-                    Mobile device detected
-                </div>
-            )}
 
             {/* Debug indicator for player character assignment - removed */}
 
@@ -4500,6 +5054,19 @@ export function App() {
 
             {/* Add the flashlight UI component */}
             <FlashlightUI />
+            <DroneUI />
+            <DroneThermalOverlay />
+
+            <GameModeMenu
+                currentMode={gameMode}
+                visible={showGameModeMenu || gameMode === null}
+                onOpen={() => {
+                    if (document.pointerLockElement) document.exitPointerLock();
+                    setShowGameModeMenu(true);
+                }}
+                onClose={() => setShowGameModeMenu(false)}
+                onSelect={selectGameMode}
+            />
 
             {/* Add Settings Hint */}
             {!levaVisible && (
@@ -4520,60 +5087,84 @@ export function App() {
                 </div>
             )}
 
-            {/* Game HUD - top center scoreboard */}
-            <GameHUD
-                jackalopesScore={jackalopesScore}
-                mercsScore={mercsScore}
-                playerType={playerCharacterInfo.type}
-                isHost={isHost}
-                matchStartTime={matchTimerData?.matchStartTime}
-                matchDuration={matchTimerData?.matchDuration}
-                serverTime={matchTimerData?.serverTime}
-                onTimerEnd={handleRoundEnd}
-                roundKey={roundKey}
-                inventory={{ goldenEggs: goldenEggCount, rainbowEggs: rainbowEggCount }}
-            />
+            <SwimmingHUD />
+            {goldenVisionActive && <HolographicSenseHUD until={goldenVisionUntil} />}
+            {adventureMode ? (
+                <AdventureHUD
+                    avatar={adventureAvatar}
+                    onToggleAvatar={toggleAdventureAvatar}
+                    lushGrove={lushGrove}
+                    onToggleGrove={toggleLushGrove}
+                    goldenEggs={goldenEggCount}
+                    rainbowEggs={rainbowEggCount}
+                    greenNightVision={greenNightVisionActive}
+                    onEditMap={() => {
+                        if (document.pointerLockElement) document.exitPointerLock();
+                        window.location.href = '/?mode=adventure&editor=terrain';
+                    }}
+                />
+            ) : gameMode === 'hunt' ? (
+                <GameHUD
+                    jackalopesScore={jackalopesScore}
+                    mercsScore={mercsScore}
+                    playerType={playerCharacterInfo.type}
+                    isHost={isHost}
+                    matchStartTime={matchTimerData?.matchStartTime}
+                    matchDuration={matchTimerData?.matchDuration}
+                    serverTime={matchTimerData?.serverTime}
+                    onTimerEnd={handleRoundEnd}
+                    roundKey={roundKey}
+                    inventory={{ goldenEggs: goldenEggCount, rainbowEggs: rainbowEggCount, greenNightVision: greenNightVisionActive }}
+                />
+            ) : null}
 
             {/* Crosshair for mercs */}
-            {playerCharacterInfo.type === 'merc' && !gameOver && (
+            {!adventureMode && playerCharacterInfo.type === 'merc' && !gameOver && (
                 <GameCrosshair hitMarker={hitMarker} size={28} />
             )}
 
             {/* Kill feed */}
-            <KillFeed />
+            {!adventureMode && <KillFeed />}
 
             <AudioCommsPanel
                 connectionManager={connectionManager}
                 enabled={true}
-                playerType={playerCharacterInfo.type}
-                position={showVirtualGamepad ? 'right-center' : 'bottom-right'}
+                playerType={adventureMode ? 'jackalope' : playerCharacterInfo.type}
+                position={showVirtualGamepad ? 'top-right' : 'bottom-right'}
             />
 
             {/* Jackalope Player Count - Top Left */}
-            <PlayerCountDisplay playerType="jackalope" position="left" />
+            {!adventureMode && <PlayerCountDisplay playerType="jackalope" position="left" />}
 
             {/* Merc Player Count - Top Right */}
-            <PlayerCountDisplay playerType="merc" position="right" />
+            {!adventureMode && <PlayerCountDisplay playerType="merc" position="right" />}
 
             {/* Add IntroScreen */}
             <IntroScreenManager
-                playerType={playerCharacterInfo.type}
+                playerType={adventureMode ? 'jackalope' : playerCharacterInfo.type}
+                gameMode={gameMode || 'hunt'}
             />
 
             {/* Game Over screen */}
-            <GameOverScreen
-                visible={gameOver}
-                jackalopesScore={jackalopesScore}
-                mercsScore={mercsScore}
-                playerType={playerCharacterInfo.type}
-                onPlayAgain={handlePlayAgain}
-            />
+            {!adventureMode && (
+                <GameOverScreen
+                    visible={gameOver}
+                    jackalopesScore={jackalopesScore}
+                    mercsScore={mercsScore}
+                    playerType={playerCharacterInfo.type}
+                    onPlayAgain={handlePlayAgain}
+                />
+            )}
 
             <RespawnButton connectionManager={connectionManager} />
 
             {/* Merc flashblind overlay from rainbow egg flashbang */}
-            {playerCharacterInfo.type === 'merc' && mercFlashblindUntil > Date.now() && (
+            {!adventureMode && playerCharacterInfo.type === 'merc' && mercFlashblindUntil > Date.now() && (
                 <MercFlashblindOverlay until={mercFlashblindUntil} />
+            )}
+
+            {playerCharacterInfo.type === 'jackalope' && (
+                <NightVisionOverlay active={greenNightVisionActive && !goldenVisionActive} />
             )}
         </>
     );

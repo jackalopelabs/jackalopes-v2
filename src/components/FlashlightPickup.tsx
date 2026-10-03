@@ -6,6 +6,7 @@ declare global {
   interface Window {
     __localPlayerPosition?: THREE.Vector3;
     __localPlayerInteract?: boolean;
+    __lastLocalInteractAt?: number;
     jackalopesGame?: any;
   }
 }
@@ -123,7 +124,7 @@ export const FlashlightPickup: React.FC<FlashlightPickupProps> = ({ enabled, con
     const pickupPos = new THREE.Vector3(spawnPoint[0], groupRef.current.position.y, spawnPoint[2]);
     const distance = pickupPos.distanceTo(playerPosition);
     const nowNearby = distance <= INTERACTION_RANGE;
-    const interactPressed = window.__localPlayerInteract || false;
+    const interactPressed = !!window.__localPlayerInteract || (Date.now() - (window.__lastLocalInteractAt || 0) < 150);
 
     if (nowNearby !== nearbyRef.current) {
       nearbyRef.current = nowNearby;
@@ -134,16 +135,17 @@ export const FlashlightPickup: React.FC<FlashlightPickupProps> = ({ enabled, con
 
     if (nowNearby && interactPressed && !lastInteractPressed.current && !announcedPickupRef.current) {
       announcedPickupRef.current = true;
+
+      setCollected(true);
+      if (!window.jackalopesGame) window.jackalopesGame = {};
+      window.jackalopesGame.flashlightCollected = true;
+      window.jackalopesGame.flashlightOn = true;
+      window.dispatchEvent(new CustomEvent('flashlightPickupChanged', { detail: { collected: true } }));
+      window.dispatchEvent(new CustomEvent('flashlightToggled', { detail: { isOn: true } }));
+      window.dispatchEvent(new CustomEvent('flashlightCollected'));
+
       if (connectionManager) {
         connectionManager.sendFlashlightPickup();
-      } else {
-        setCollected(true);
-        if (!window.jackalopesGame) window.jackalopesGame = {};
-        window.jackalopesGame.flashlightCollected = true;
-        window.jackalopesGame.flashlightOn = true;
-        window.dispatchEvent(new CustomEvent('flashlightPickupChanged', { detail: { collected: true } }));
-        window.dispatchEvent(new CustomEvent('flashlightToggled', { detail: { isOn: true } }));
-        window.dispatchEvent(new CustomEvent('flashlightCollected'));
       }
     }
 

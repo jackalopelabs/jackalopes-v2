@@ -53,9 +53,12 @@ export const MultiplayerSyncManager: React.FC<MultiplayerSyncManagerProps> = ({
     // When a player joins, ensure they're in the EntityStateObserver
     const handlePlayerJoined = (data: any) => {
       console.log('🔄 Player joined event received:', data);
+
+      const remotePlayerId = data.player?.id || data.id;
+      if (!remotePlayerId) return;
       
       // Make sure it's not our own player
-      if (data.id === connectionManager.getPlayerId()) {
+      if (remotePlayerId === connectionManager.getPlayerId()) {
         console.log('Ignoring join event for local player');
         return;
       }
@@ -64,31 +67,22 @@ export const MultiplayerSyncManager: React.FC<MultiplayerSyncManagerProps> = ({
       const playerType = data.state?.playerType || data.playerType || 'unknown';
       
       // Determine player type using a more consistent approach
-      let finalPlayerType: 'merc' | 'jackalope' = 'merc';
-      
-      if (playerType !== 'unknown' && (playerType === 'merc' || playerType === 'jackalope')) {
+      let finalPlayerType: 'merc' | 'jackalope';
+
+      if (connectionManager.getGameMode?.() === 'adventure') {
+        finalPlayerType = 'jackalope';
+      } else if (playerType !== 'unknown' && (playerType === 'merc' || playerType === 'jackalope')) {
         // Use the explicitly provided type if valid
         finalPlayerType = playerType as 'merc' | 'jackalope';
         console.log(`🔄 Using explicitly provided player type: ${finalPlayerType}`);
       } else {
-        // Fall back to player index parity (even = jackalope, odd = merc)
-        // Use player ID hash for consistent assignment across sessions
-        let playerIndex = 0;
-        try {
-          // Use a simple hash of the player ID
-          const idSum = data.id.split('').reduce((acc: number, char: string) => acc + char.charCodeAt(0), 0);
-          playerIndex = idSum % 10; // Keep it to single digit for simplicity
-        } catch (e) {
-          console.error('Error generating player index from ID:', e);
-        }
-        
-        finalPlayerType = playerIndex % 2 === 0 ? 'jackalope' : 'merc';
-        console.log(`🔄 Assigned player type ${finalPlayerType} based on ID hash: ${playerIndex}`);
+        console.warn(`🔄 Waiting for authoritative player type for ${remotePlayerId}`);
+        return;
       }
       
       // Register the entity in the EntityStateObserver
       entityStateObserver.updateEntity({
-        id: data.id,
+        id: remotePlayerId,
         type: finalPlayerType,
         position: data.state?.position || [0, 1, 0],
         rotation: data.state?.rotation || 0,
@@ -101,14 +95,14 @@ export const MultiplayerSyncManager: React.FC<MultiplayerSyncManagerProps> = ({
       // Update our local state to trigger rendering
       setRemoteEntities(prev => {
         // Skip if entity already exists with the same type
-        if (prev[data.id] && prev[data.id].type === finalPlayerType) {
+        if (prev[remotePlayerId] && prev[remotePlayerId].type === finalPlayerType) {
           return prev;
         }
         
         return {
           ...prev,
-          [data.id]: {
-            id: data.id,
+          [remotePlayerId]: {
+            id: remotePlayerId,
             type: finalPlayerType,
             position: data.state?.position || [0, 1, 0],
             rotation: data.state?.rotation || 0
@@ -154,14 +148,15 @@ export const MultiplayerSyncManager: React.FC<MultiplayerSyncManagerProps> = ({
     
     // When a player leaves, remove them from EntityStateObserver
     const handlePlayerLeft = (data: any) => {
-      if (data.id) {
+      const remotePlayerId = data.player || data.id;
+      if (remotePlayerId) {
         // Remove from EntityStateObserver
-        entityStateObserver.removeEntity(data.id);
+        entityStateObserver.removeEntity(remotePlayerId);
         
         // Update our local state to remove the entity
         setRemoteEntities(prev => {
           const newEntities = { ...prev };
-          delete newEntities[data.id];
+          delete newEntities[remotePlayerId];
           return newEntities;
         });
       }
@@ -216,8 +211,11 @@ export const MultiplayerSyncManager: React.FC<MultiplayerSyncManagerProps> = ({
         
         console.log(`🔄 [SyncManager] Received respawn event for player ${respawnPlayerId}:`, event);
         
+        const existingEntity = entityStateObserver.getEntity(respawnPlayerId);
+        const respawnPlayerType = (event.playerType || existingEntity?.type || 'jackalope') as 'merc' | 'jackalope';
+
         // Skip if it's not for an entity we're tracking
-        if (!entityStateObserver.getEntity(respawnPlayerId)) {
+        if (!existingEntity) {
           console.log(`🔄 [SyncManager] Cannot process respawn for unknown entity: ${respawnPlayerId}`);
           // Try to create the entity if it doesn't exist yet
           try {
@@ -234,7 +232,7 @@ export const MultiplayerSyncManager: React.FC<MultiplayerSyncManagerProps> = ({
             console.log(`🔄 [SyncManager] Creating missing entity for respawn: ${respawnPlayerId}`);
             entityStateObserver.updateEntity({
               id: respawnPlayerId,
-              type: 'jackalope', // Assume jackalope since only they respawn
+              type: respawnPlayerType,
               position: fallbackPosition,
               rotation: 0,
               isMoving: false,
@@ -320,7 +318,7 @@ export const MultiplayerSyncManager: React.FC<MultiplayerSyncManagerProps> = ({
                 rotation: 0,
                 sequence: Date.now(),
                 isRespawning: false,
-                playerType: 'jackalope'
+                playerType: respawnPlayerType
               },
               player_id: respawnPlayerId
             });

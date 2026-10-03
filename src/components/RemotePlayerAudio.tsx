@@ -43,16 +43,23 @@ interface AudioSettings {
  * This attaches different sounds to remote players and positions them in 3D space
  * so they can be heard relative to the listener (local player).
  */
-export const RemotePlayerAudio: React.FC<RemotePlayerAudioProps> = ({ 
-  playerId, 
-  position, 
-  isWalking = false, 
+export const RemotePlayerAudio: React.FC<RemotePlayerAudioProps> = ({
+  playerId,
+  position,
+  isWalking = false,
   isRunning = false,
   isShooting = false,
   playerType = 'merc' // Default to merc if not specified
 }) => {
   // Get camera to use its audio listener
   const { camera } = useThree();
+
+  // Debug: Log when movement state changes for mercs
+  useEffect(() => {
+    if (playerType === 'merc' && (isWalking || isRunning)) {
+      console.log(`[RemotePlayerAudio DEBUG] Merc ${playerId} movement: isWalking=${isWalking}, isRunning=${isRunning}`);
+    }
+  }, [isWalking, isRunning, playerType, playerId]);
   
   // References for audio objects
   const audioGroupRef = useRef<THREE.Group>(null);
@@ -76,8 +83,8 @@ export const RemotePlayerAudio: React.FC<RemotePlayerAudioProps> = ({
     muteAll: false
   });
 
-  // Calculate volume modifier based on player type (reduce jackalope volume by 75%)
-  const volumeModifier = playerType === 'jackalope' ? 0.25 : 1.0;
+  // Calculate volume modifier based on player type (jackalopes are silent/stealthy)
+  const volumeModifier = playerType === 'jackalope' ? 0 : 1.0;
 
   // Store the current movement state to detect changes
   const prevStateRef = useRef({ isWalking, isRunning, isShooting });
@@ -191,18 +198,21 @@ export const RemotePlayerAudio: React.FC<RemotePlayerAudioProps> = ({
   useEffect(() => {
     if (!audioGroupRef.current) return;
     
-    // Find existing audio listener on camera
-    const listener = camera.children.find(child => child instanceof THREE.AudioListener) as THREE.AudioListener;
-    
+    // Find existing audio listener on camera, or create one if none exists
+    let listener = camera.children.find(child => child instanceof THREE.AudioListener) as THREE.AudioListener;
+
     if (isDebugEnabled(DEBUG_LEVELS.INFO)) {
       log.audio(`Setting up remote player audio system for player: ${playerId}`);
     }
-    
+
     if (!listener) {
-      if (isDebugEnabled(DEBUG_LEVELS.ERROR)) {
-        log.error('No audio listener found on camera for remote player audio');
+      // Create a new AudioListener for the camera (needed for jackalope players)
+      if (isDebugEnabled(DEBUG_LEVELS.INFO)) {
+        log.audio('Creating new audio listener on camera for remote player audio');
       }
-      return;
+      listener = new THREE.AudioListener();
+      camera.add(listener);
+      camera.userData.mainAudioListener = listener;
     }
     
     // Create audio loader
@@ -241,9 +251,7 @@ export const RemotePlayerAudio: React.FC<RemotePlayerAudioProps> = ({
     shotSound.setMaxDistance(150); // Gunshots can be heard from very far
     
     // Load walking sound
-    if (isDebugEnabled(DEBUG_LEVELS.VERBOSE)) {
-      log.audio(`Loading walking sound for remote player ${playerId}`);
-    }
+    console.log(`[RemotePlayerAudio] Loading sounds for ${playerType} ${playerId}, volumeModifier=${volumeModifier}`);
     
     // Use available sound assets - always use MercWalking for both character types
     // We'll adjust volume based on character type instead
@@ -251,9 +259,7 @@ export const RemotePlayerAudio: React.FC<RemotePlayerAudioProps> = ({
       
     audioLoader.load(walkingSoundPath, 
       (buffer) => {
-        if (isDebugEnabled(DEBUG_LEVELS.VERBOSE)) {
-          log.audio(`Walking sound loaded successfully for player ${playerId}`);
-        }
+        console.log(`[RemotePlayerAudio] Walking sound LOADED for ${playerType} ${playerId}`);
         walkingSound.setBuffer(buffer);
         walkingSound.setLoop(true);
         walkingSound.setVolume(
@@ -685,10 +691,11 @@ export const RemotePlayerAudio: React.FC<RemotePlayerAudioProps> = ({
     const prevState = prevStateRef.current;
     
     // SIMPLIFIED SOUND CONTROL LOGIC FOR CLARITY
-    
+
     // First, determine which sound should be playing
-    const shouldPlayWalking = isWalking === true && isRunning !== true;
-    const shouldPlayRunning = isRunning === true;
+    // Jackalopes are silent/stealthy - no footstep sounds
+    const shouldPlayWalking = playerType !== 'jackalope' && isWalking === true && isRunning !== true;
+    const shouldPlayRunning = playerType !== 'jackalope' && isRunning === true;
     
     // Log on state changes to help diagnose issues
     if (prevState.isWalking !== isWalking || prevState.isRunning !== isRunning) {
@@ -727,15 +734,11 @@ export const RemotePlayerAudio: React.FC<RemotePlayerAudioProps> = ({
       if (shouldPlayWalking) {
         // Should play walking sound - but double check running is stopped
         if (!walkingSoundRef.current.isPlaying && !runningSoundRef.current?.isPlaying) {
-          if (isDebugEnabled(DEBUG_LEVELS.INFO) || window.__debugRemoteSounds) {
-            console.log(`[RemotePlayerAudio] ${playerType} ${playerId}: Starting WALKING sound`);
-          }
+          console.log(`[RemotePlayerAudio] ${playerType} ${playerId}: PLAYING WALKING sound`);
           try {
             walkingSoundRef.current.play();
           } catch (e) {
-            if (isDebugEnabled(DEBUG_LEVELS.ERROR)) {
-              console.error(`[RemotePlayerAudio] Error playing walking sound:`, e);
-            }
+            console.error(`[RemotePlayerAudio] Error playing walking sound:`, e);
           }
         }
       }
@@ -746,15 +749,11 @@ export const RemotePlayerAudio: React.FC<RemotePlayerAudioProps> = ({
       if (shouldPlayRunning) {
         // Should play running sound - but double check walking is stopped
         if (!runningSoundRef.current.isPlaying && !walkingSoundRef.current?.isPlaying) {
-          if (isDebugEnabled(DEBUG_LEVELS.INFO) || window.__debugRemoteSounds) {
-            console.log(`[RemotePlayerAudio] ${playerType} ${playerId}: Starting RUNNING sound`);
-          }
+          console.log(`[RemotePlayerAudio] ${playerType} ${playerId}: PLAYING RUNNING sound`);
           try {
             runningSoundRef.current.play();
           } catch (e) {
-            if (isDebugEnabled(DEBUG_LEVELS.ERROR)) {
-              console.error(`[RemotePlayerAudio] Error playing running sound:`, e);
-            }
+            console.error(`[RemotePlayerAudio] Error playing running sound:`, e);
           }
         }
       }

@@ -9,7 +9,13 @@ interface GameHUDProps {
   serverTime?: number;
   isHost?: boolean;
   onTimerEnd?: () => void;
+  onTimeUpdate?: (timeRemaining: number) => void;
   roundKey?: number; // increment to reset the timer for a new round
+  inventory?: {
+    goldenEggs: number;
+    rainbowEggs: number;
+    greenNightVision: boolean;
+  };
 }
 
 export const GameHUD: React.FC<GameHUDProps> = ({
@@ -21,23 +27,27 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   serverTime,
   isHost = false,
   onTimerEnd,
+  onTimeUpdate,
   roundKey = 0,
+  inventory = { goldenEggs: 0, rainbowEggs: 0, greenNightVision: false },
 }) => {
+  const serverClockOffsetRef = useRef<number | null>(serverTime ? (Date.now() - serverTime) : null);
+  const getAuthoritativeRemaining = useCallback((now = Date.now()) => {
+    if (!matchStartTime || !matchDuration) return null;
+    const offset = serverClockOffsetRef.current ?? 0;
+    const serverNow = now - offset;
+    return Math.max(0, matchDuration - Math.floor((serverNow - matchStartTime) / 1000));
+  }, [matchDuration, matchStartTime]);
+
   const [timeRemaining, setTimeRemaining] = useState(() => {
-    if (matchStartTime && matchDuration) {
-      const clockOffset = serverTime ? (Date.now() - serverTime) : 0;
-      const elapsed = Math.floor((Date.now() - matchStartTime - clockOffset) / 1000);
-      const remaining = matchDuration - elapsed;
-      // If match data is stale (already expired), start a fresh round
-      if (remaining <= 0) return matchDuration;
-      return remaining;
-    }
-    return matchDuration;
+    const authoritative = getAuthoritativeRemaining();
+    return authoritative ?? matchDuration;
   });
 
   const [jackalopesFlash, setJackalopesFlash] = useState(false);
   const [mercsFlash, setMercsFlash] = useState(false);
   const prevScores = useRef({ j: jackalopesScore, m: mercsScore });
+  const timerResetSentRef = useRef(false);
 
   // Score flash animations
   useEffect(() => {
@@ -56,42 +66,59 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     prevScores.current.m = mercsScore;
   }, [mercsScore]);
 
+  // Sync clock offset from server time whenever authoritative timer data changes.
+  useEffect(() => {
+    if (serverTime) {
+      serverClockOffsetRef.current = Date.now() - serverTime;
+    }
+
+    const authoritative = getAuthoritativeRemaining();
+    if (authoritative !== null) {
+      timerResetSentRef.current = false;
+      setTimeRemaining(authoritative);
+    }
+  }, [getAuthoritativeRemaining, serverTime]);
+
   // Timer
   useEffect(() => {
     const interval = setInterval(() => {
       setTimeRemaining(prev => {
-        if (prev <= 1) {
-          onTimerEnd?.();
+        const authoritative = getAuthoritativeRemaining();
+        const nextTime = authoritative ?? Math.max(0, prev - 1);
+
+        if (nextTime <= 0) {
+          if (isHost && !timerResetSentRef.current) {
+            timerResetSentRef.current = true;
+            const detail = {
+              timestamp: Date.now(),
+              id: `gamehud-timer-reset-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+              fromHost: true,
+              shouldResetScores: true,
+              source: 'game_hud',
+            };
+            window.dispatchEvent(new CustomEvent('timer_reset', { detail }));
+            onTimerEnd?.();
+          }
           return 0;
         }
-        return prev - 1;
+
+        return nextTime;
       });
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [onTimerEnd]);
+  }, [getAuthoritativeRemaining, isHost, onTimerEnd]);
 
-  // Sync from server timer data
+  // Reset timer when a new round starts or new authoritative match timing arrives
   useEffect(() => {
-    if (matchStartTime && matchDuration) {
-      const clockOffset = serverTime ? (Date.now() - serverTime) : 0;
-      const elapsed = Math.floor((Date.now() - matchStartTime - clockOffset) / 1000);
-      const remaining = matchDuration - elapsed;
-      // Only sync if the match is still active; ignore stale data
-      if (remaining > 0) {
-        setTimeRemaining(remaining);
-      }
-    }
-  }, [matchStartTime, matchDuration, serverTime]);
+    timerResetSentRef.current = false;
+    const authoritative = getAuthoritativeRemaining();
+    setTimeRemaining(authoritative ?? matchDuration);
+  }, [getAuthoritativeRemaining, matchDuration, matchStartTime, roundKey]);
 
-  // Reset timer when a new round starts
+  // Listen for host timer syncs only in local fallback mode.
   useEffect(() => {
-    setTimeRemaining(matchDuration);
-  }, [roundKey, matchDuration]);
-
-  // Listen for host timer syncs
-  useEffect(() => {
-    if (isHost) return;
+    if (isHost || matchStartTime) return;
     const handleSync = (e: CustomEvent) => {
       if (e.detail?.fromHost && e.detail.timeRemaining !== undefined) {
         setTimeRemaining(e.detail.timeRemaining);
@@ -99,7 +126,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     };
     window.addEventListener('host_timer_full_sync', handleSync as EventListener);
     return () => window.removeEventListener('host_timer_full_sync', handleSync as EventListener);
-  }, [isHost]);
+  }, [isHost, matchStartTime]);
 
   // Host broadcasts timer
   useEffect(() => {
@@ -112,6 +139,19 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     return () => clearInterval(interval);
   }, [isHost, timeRemaining]);
 
+  // Broadcast the actual live countdown so other systems, like lighting, follow the same timer the HUD shows.
+  useEffect(() => {
+    onTimeUpdate?.(timeRemaining);
+    window.dispatchEvent(new CustomEvent('jackalopes_timer_tick', {
+      detail: {
+        timeRemaining,
+        timestamp: Date.now(),
+        isHost,
+        source: 'game_hud',
+      }
+    }));
+  }, [isHost, onTimeUpdate, timeRemaining]);
+
   const formatTime = (s: number) => {
     const m = Math.floor(s / 60);
     const sec = s % 60;
@@ -122,6 +162,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const isCritical = timeRemaining <= 10;
 
   return (
+    <>
     <div style={{
       position: 'fixed',
       top: 0,
@@ -156,7 +197,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           letterSpacing: '1px',
           textShadow: '1px 1px 2px rgba(0,0,0,0.8)',
         }}>
-          🐰 JACKALOPES
+          JACKALOPES
         </span>
         <span style={{
           fontSize: jackalopesFlash ? '32px' : '26px',
@@ -239,7 +280,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           letterSpacing: '1px',
           textShadow: '1px 1px 2px rgba(0,0,0,0.8)',
         }}>
-          MERCS 🎯
+          MERCS
         </span>
       </div>
 
@@ -250,6 +291,106 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         }
       `}</style>
     </div>
+
+    {playerType === 'jackalope' && (inventory.rainbowEggs > 0 || inventory.greenNightVision) && (
+      <div style={{
+        position: 'fixed',
+        top: '66px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 1999,
+        pointerEvents: 'none',
+        fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+        display: 'flex',
+        gap: '8px',
+      }}>
+        {inventory.greenNightVision && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '6px 10px',
+            borderRadius: '999px',
+            background: 'linear-gradient(180deg, rgba(100,255,140,0.18) 0%, rgba(40,120,60,0.10) 100%)',
+            backdropFilter: 'blur(12px)',
+            color: '#fff',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+          }}>
+            <span style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '999px',
+              background: 'linear-gradient(180deg, #d8ffd7 0%, #4dff88 100%)',
+              boxShadow: '0 0 12px rgba(77,255,136,0.8)',
+              flexShrink: 0,
+            }} />
+            <span style={{
+              fontSize: '11px',
+              fontWeight: 700,
+              letterSpacing: '0.12em',
+              color: '#d9ffe0',
+            }}>
+              NIGHT VISION
+            </span>
+            <span style={{
+              fontSize: '10px',
+              color: '#b7f7c1',
+              letterSpacing: '0.06em',
+            }}>
+              ACTIVE
+            </span>
+          </div>
+        )}
+
+        {inventory.rainbowEggs > 0 && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '6px 10px',
+            borderRadius: '999px',
+            background: 'linear-gradient(180deg, rgba(255,255,255,0.09) 0%, rgba(255,255,255,0.04) 100%)',
+            backdropFilter: 'blur(12px)',
+            color: '#fff',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+          }}>
+            <span style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '999px',
+              background: 'linear-gradient(180deg, #ffffff 0%, #a78bfa 100%)',
+              boxShadow: '0 0 12px rgba(167,139,250,0.8)',
+              flexShrink: 0,
+            }} />
+            <span style={{
+              fontSize: '11px',
+              fontWeight: 700,
+              letterSpacing: '0.12em',
+              color: '#cbd5e1',
+            }}>
+              FLASH
+            </span>
+            <span style={{
+              fontSize: '14px',
+              fontWeight: 900,
+              color: '#fff',
+              minWidth: '14px',
+              textAlign: 'center',
+            }}>
+              {inventory.rainbowEggs}
+            </span>
+            <span style={{
+              fontSize: '10px',
+              color: '#94a3b8',
+              letterSpacing: '0.06em',
+            }}>
+              B / CLICK
+            </span>
+          </div>
+        )}
+      </div>
+    )}
+    </>
   );
 };
 

@@ -1,0 +1,71 @@
+.player-marker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  color: #e0f2fe;
+  filter: drop-shadow(0 3px 9px rgba(0, 0, 0, 0.9));
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.player-marker--merc { color: #fed7aa; }
+
+.player-marker__beacon {
+  position: relative;
+  display: grid;
+  width: 21px;
+  height: 21px;
+  place-items: center;
+}
+
+.player-marker__pulse {
+  position: absolute;
+  inset: 1px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.18;
+  animation: player-marker-pulse 2.4s ease-out infinite;
+}
+
+.player-marker__diamond {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  transform: rotate(45deg);
+  border-radius: 2px;
+  background: currentColor;
+  box-shadow: 0 0 13px currentColor;
+}
+
+.player-marker__meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: currentColor;
+  background: rgba(3, 8, 18, 0.68);
+  backdrop-filter: blur(10px);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  line-height: 1;
+}
+
+.player-marker__distance {
+  color: rgba(255, 255, 255, 0.66);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+}
+
+@keyframes player-marker-pulse {
+  0% { opacity: 0.24; transform: scale(0.65); }
+  70%, 100% { opacity: 0; transform: scale(1.65); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-marker__pulse { animation: none; }
+}

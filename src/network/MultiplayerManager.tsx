@@ -38,12 +38,28 @@ type RemotePlayerData = {
   position: { x: number, y: number, z: number };
   rotation: number;  // For simpler cases we use a single rotation value (yaw around Y axis)
   lastUpdate?: number;
+  adventureAvatar?: 'jackalope' | 'astronaut';
   playerType?: 'merc' | 'jackalope';
   isMoving?: boolean;  // Flag to indicate if player is moving
   isRunning?: boolean; // Added flag to indicate if player is running
   isShooting?: boolean; // Added flag to indicate if player is shooting
   flashlightOn?: boolean; // Added flag to indicate if flashlight is on
   cameraPitch?: number; // Camera pitch angle for flashlight vertical aiming
+  droneActive?: boolean;
+  dronePosition?: { x: number, y: number, z: number };
+  droneRotation?: number;
+  droneThermalActive?: boolean;
+};
+
+const resolveRemotePlayerType = (
+  connectionManager: ConnectionManager,
+  data: any,
+  fallback?: 'merc' | 'jackalope'
+): 'merc' | 'jackalope' | null => {
+  if (connectionManager.getGameMode?.() === 'adventure') return 'jackalope';
+
+  const explicitType = data.playerType || data.state?.playerType || fallback;
+  return explicitType === 'merc' || explicitType === 'jackalope' ? explicitType : null;
 };
 
 // Interface for RemotePlayer props
@@ -186,6 +202,38 @@ export const useMultiplayer = (
   const remotePlayerRefs = useRef<Record<string, RemotePlayerData>>({});
   const updateMethodsRef = useRef<Record<string, RemotePlayerMethods>>({});
   const { camera } = useThree();
+
+  useEffect(() => {
+    const ACTIVE_PLAYER_RESET_GRACE_MS = 8000;
+
+    const handleRoundResetCleanup = () => {
+      const now = Date.now();
+
+      setRemotePlayers(prev => {
+        const next: Record<string, RemotePlayerData> = {};
+
+        Object.entries(prev).forEach(([id, player]) => {
+          const lastUpdate = player?.lastUpdate || 0;
+          const isActive = now - lastUpdate <= ACTIVE_PLAYER_RESET_GRACE_MS;
+
+          if (isActive) {
+            next[id] = player;
+          } else {
+            delete remotePlayerRefs.current[id];
+            delete updateMethodsRef.current[id];
+            console.log(`🧹 Removing stale remote player ${id} during round reset cleanup`);
+          }
+        });
+
+        return next;
+      });
+    };
+
+    window.addEventListener('jackalopesRoundReset', handleRoundResetCleanup);
+    return () => {
+      window.removeEventListener('jackalopesRoundReset', handleRoundResetCleanup);
+    };
+  }, []);
   
   // Add refs for optimization
   const lastSentPosition = useRef<[number, number, number] | null>(null);
@@ -464,25 +512,13 @@ export const useMultiplayer = (
 
       console.log(`Adding new remote player: ${playerId}`);
       
-      // Get player type from the server data if available, or use a determinate assignment based on player count
-      let playerType = data.playerType || data.state?.playerType || 'unknown';
-      
-      // If we don't have a specific player type from the server
-      if (playerType === 'unknown') {
-        // Count existing remote players to determine the next alternating type
-        const remotePlayerCount = Object.keys(remotePlayers).length;
-        playerType = remotePlayerCount % 2 === 0 ? 'jackalope' : 'merc';
-        console.log(`No player type in data - assigning based on player count: ${playerType}`);
+      const playerType = resolveRemotePlayerType(connectionManager, data);
+      if (!playerType) {
+        console.warn(`Waiting for authoritative player type before rendering ${playerId}`);
+        return;
       }
       
       console.log(`Assigning player type ${playerType} to ${playerId}`);
-
-      // Check if this aligns with expected alternating pattern and log any discrepancies
-      const remotePlayerCount = Object.keys(remotePlayers).length;
-      const expectedType = remotePlayerCount % 2 === 0 ? 'jackalope' : 'merc';
-      if (playerType !== expectedType) {
-        console.log(`⚠️ Player ${playerId} has type ${playerType} but expected ${expectedType} based on remote player count ${remotePlayerCount}`);
-      }
 
       console.log(`Final player type assignment for ${playerId}: ${playerType}`);
 
@@ -514,7 +550,11 @@ export const useMultiplayer = (
             isMoving: false, // Start as idle
             isRunning: false, // Start as not running
             isShooting: false, // Start as not shooting
-            flashlightOn: data.state?.flashlightOn || false // Track flashlight state
+            flashlightOn: data.state?.flashlightOn || false,
+            droneActive: data.state?.droneActive || false,
+            dronePosition: data.state?.dronePosition ? arrayToObjectPosition(data.state.dronePosition) : undefined,
+            droneRotation: data.state?.droneRotation ? quaternionToAngle(data.state.droneRotation) : undefined,
+            droneThermalActive: data.state?.droneThermalActive || false
           }
         };
       });
@@ -568,7 +608,8 @@ export const useMultiplayer = (
           console.log(`Adding player ${data.id} from update - wasn't in our list`);
           
           // For new players, get the playerType from the data
-          const newPlayerType = data.playerType || data.state?.playerType || 'merc';
+          const newPlayerType = resolveRemotePlayerType(connectionManager, data);
+          if (!newPlayerType) return prev;
           
           // Convert position and rotation
           const position = data.position 
@@ -589,10 +630,15 @@ export const useMultiplayer = (
               rotation,
               lastUpdate: now,
               playerType: newPlayerType,
+              adventureAvatar: connectionManager.getGameMode() === 'adventure' && data.state?.adventureAvatar === 'astronaut' ? 'astronaut' : 'jackalope',
               isMoving: false,
               isRunning: false,
               isShooting: false,
-              flashlightOn: data.state?.flashlightOn || false // Track flashlight state
+              flashlightOn: data.state?.flashlightOn || false,
+              droneActive: data.state?.droneActive || false,
+              dronePosition: data.state?.dronePosition ? arrayToObjectPosition(data.state.dronePosition) : undefined,
+              droneRotation: data.state?.droneRotation ? quaternionToAngle(data.state.droneRotation) : undefined,
+              droneThermalActive: data.state?.droneThermalActive || false
             }
           };
         }
@@ -622,68 +668,83 @@ export const useMultiplayer = (
         const flashlightOn = data.state?.flashlightOn !== undefined ? 
           data.state.flashlightOn : existingPlayer.flashlightOn;
         
-        // Detect movement by calculating position change
+        // Use explicit movement state from sender if available, otherwise infer from position
         let isMoving = false;
         let isRunning = false;
-        let timeDelta = 0.016; // Default to 60fps (~16ms)
-        let speed = 0;
-        
-        // Calculate movement only if we have position data
-        if (data.position && existingPlayer.position) {
-          const prevPos = existingPlayer.position;
-          const distance = Math.sqrt(
-            Math.pow(position.x - prevPos.x, 2) + 
-            Math.pow(position.y - prevPos.y, 2) + 
-            Math.pow(position.z - prevPos.z, 2)
-          );
-          
-          // Get the current moving state
-          const wasMoving = existingPlayer.isMoving || false;
-          const wasRunning = existingPlayer.isRunning || false;
-          
-          // Calculate speed if we have a previous update time
-          if (existingPlayer.lastUpdate) {
-            // Calculate time delta in seconds (max 1s to avoid giant jumps)
-            timeDelta = Math.min((now - existingPlayer.lastUpdate) / 1000, 1);
-            if (timeDelta > 0) {
-              speed = distance / timeDelta;
-            }
-          }
-          
-          // Apply hysteresis - use different thresholds for starting vs stopping movement
-          // IMPORTANT: Completely stopped detection
-          if (distance < 0.02) {
-            // Very little movement - considered stopped
-            isMoving = false;
-            isRunning = false;
-          }
-          // Significant movement - determine if walking or running
-          else if (distance > 0.05 || wasMoving) {
-            isMoving = true;
-            
-            // Determine running state based on speed with clearer threshold
-            // Running when speed > 8.0 units/second
-            if (speed > 8.0) {
-              isRunning = true;
-            } 
-            // Walking when speed is between 0.2 and 8.0
-            else if (speed > 0.2 && speed <= 8.0) {
-              isRunning = false;
-            }
-            // For other cases, maintain previous running state with consistency checks
-            else {
-              isRunning = wasRunning;
-              
-              // But ensure we never have isRunning=true when speed is very low
-              if (isRunning && speed < 0.2) {
-                isRunning = false;
-              }
-            }
-          }
-          
+
+        // Check if sender provided explicit movement state
+        if (data.state?.isWalking !== undefined || data.state?.isRunning !== undefined) {
+          // Use explicit values from sender (more accurate)
+          const senderIsWalking = data.state.isWalking || false;
+          isRunning = data.state.isRunning || false;
+          isMoving = senderIsWalking || isRunning;
+
           // Log movement state changes with clear indicators
           if ((existingPlayer.isMoving !== isMoving || existingPlayer.isRunning !== isRunning) && Math.random() < 0.3) {
-            console.log(`💨 Player ${data.id} movement: ${isMoving ? (isRunning ? '🏃 RUNNING' : '🚶 WALKING') : '🧍 STOPPED'} (dist: ${distance.toFixed(3)}, speed: ${speed.toFixed(2)})`);
+            console.log(`💨 Player ${data.id} movement (explicit): ${isMoving ? (isRunning ? '🏃 RUNNING' : '🚶 WALKING') : '🧍 STOPPED'}`);
+          }
+        } else {
+          // Fallback: Infer movement from position changes
+          let timeDelta = 0.016; // Default to 60fps (~16ms)
+          let speed = 0;
+
+          // Calculate movement only if we have position data
+          if (data.position && existingPlayer.position) {
+            const prevPos = existingPlayer.position;
+            const distance = Math.sqrt(
+              Math.pow(position.x - prevPos.x, 2) +
+              Math.pow(position.y - prevPos.y, 2) +
+              Math.pow(position.z - prevPos.z, 2)
+            );
+
+            // Get the current moving state
+            const wasMoving = existingPlayer.isMoving || false;
+            const wasRunning = existingPlayer.isRunning || false;
+
+            // Calculate speed if we have a previous update time
+            if (existingPlayer.lastUpdate) {
+              // Calculate time delta in seconds (max 1s to avoid giant jumps)
+              timeDelta = Math.min((now - existingPlayer.lastUpdate) / 1000, 1);
+              if (timeDelta > 0) {
+                speed = distance / timeDelta;
+              }
+            }
+
+            // Apply hysteresis - use different thresholds for starting vs stopping movement
+            // IMPORTANT: Completely stopped detection
+            if (distance < 0.02) {
+              // Very little movement - considered stopped
+              isMoving = false;
+              isRunning = false;
+            }
+            // Significant movement - determine if walking or running
+            else if (distance > 0.05 || wasMoving) {
+              isMoving = true;
+
+              // Determine running state based on speed with clearer threshold
+              // Running when speed > 8.0 units/second
+              if (speed > 8.0) {
+                isRunning = true;
+              }
+              // Walking when speed is between 0.2 and 8.0
+              else if (speed > 0.2 && speed <= 8.0) {
+                isRunning = false;
+              }
+              // For other cases, maintain previous running state with consistency checks
+              else {
+                isRunning = wasRunning;
+
+                // But ensure we never have isRunning=true when speed is very low
+                if (isRunning && speed < 0.2) {
+                  isRunning = false;
+                }
+              }
+            }
+
+            // Log movement state changes with clear indicators
+            if ((existingPlayer.isMoving !== isMoving || existingPlayer.isRunning !== isRunning) && Math.random() < 0.3) {
+              console.log(`💨 Player ${data.id} movement (inferred): ${isMoving ? (isRunning ? '🏃 RUNNING' : '🚶 WALKING') : '🧍 STOPPED'} (dist: ${distance.toFixed(3)}, speed: ${speed.toFixed(2)})`);
+            }
           }
         }
         
@@ -699,6 +760,7 @@ export const useMultiplayer = (
             isRunning,
             // Explicitly preserve the existing player type
             playerType: existingPlayerType,
+            adventureAvatar: connectionManager.getGameMode() === 'adventure' ? (data.state?.adventureAvatar ?? existingPlayer.adventureAvatar ?? 'jackalope') : 'jackalope',
             flashlightOn,
             cameraPitch: data.state?.cameraPitch ?? existingPlayer.cameraPitch ?? 0
           }
@@ -1477,19 +1539,26 @@ export const RemotePlayers = React.memo(({
   
   return (
     <>
-      {Object.entries(players).filter(([id]) => id && id !== 'undefined')
+      {Object.entries(players).filter(([id, player]) =>
+        id && id !== 'undefined' && (player.playerType === 'merc' || player.playerType === 'jackalope')
+      )
         .map(([id, playerData]) => (
         <RemotePlayer
           key={id}
           playerId={id}
           position={playerData.position}
           rotation={playerData.rotation}
-          playerType={playerData.playerType || 'merc'}
+          adventureAvatar={playerData.adventureAvatar}
+          playerType={playerData.playerType as 'merc' | 'jackalope'}
           isMoving={playerData.isMoving}
           isRunning={playerData.isRunning}
           isShooting={playerData.isShooting}
           flashlightOn={playerData.flashlightOn}
           cameraPitch={playerData.cameraPitch}
+          droneActive={playerData.droneActive}
+          dronePosition={playerData.dronePosition}
+          droneRotation={playerData.droneRotation}
+          droneThermalActive={playerData.droneThermalActive}
         />
       ))}
     </>
@@ -1517,6 +1586,10 @@ export const MultiplayerManager: React.FC<{
     isShooting: boolean;
     lastUpdate: number;
     playerType?: 'merc' | 'jackalope';
+    droneActive?: boolean;
+    dronePosition?: { x: number; y: number; z: number };
+    droneRotation?: number;
+    droneThermalActive?: boolean;
   }>>({});
 
   // Expose on window so RemotePlayer can read it without prop drilling
@@ -1628,25 +1701,13 @@ export const MultiplayerManager: React.FC<{
 
       console.log(`Adding new remote player: ${playerId}`);
       
-      // Get player type from the server data if available, or use a determinate assignment based on player count
-      let playerType = data.playerType || data.state?.playerType || 'unknown';
-      
-      // If we don't have a specific player type from the server
-      if (playerType === 'unknown') {
-        // Count existing remote players to determine the next alternating type
-        const remotePlayerCount = Object.keys(remotePlayers).length;
-        playerType = remotePlayerCount % 2 === 0 ? 'jackalope' : 'merc';
-        console.log(`No player type in data - assigning based on player count: ${playerType}`);
+      const playerType = resolveRemotePlayerType(connectionManager, data);
+      if (!playerType) {
+        console.warn(`Waiting for authoritative player type before rendering ${playerId}`);
+        return;
       }
       
       console.log(`Assigning player type ${playerType} to ${playerId}`);
-
-      // Check if this aligns with expected alternating pattern and log any discrepancies
-      const remotePlayerCount = Object.keys(remotePlayers).length;
-      const expectedType = remotePlayerCount % 2 === 0 ? 'jackalope' : 'merc';
-      if (playerType !== expectedType) {
-        console.log(`⚠️ Player ${playerId} has type ${playerType} but expected ${expectedType} based on remote player count ${remotePlayerCount}`);
-      }
 
       console.log(`Final player type assignment for ${playerId}: ${playerType}`);
 
@@ -1686,24 +1747,27 @@ export const MultiplayerManager: React.FC<{
     
     const handlePlayerLeft = (data: any) => {
       console.log("➖ Player left:", data);
-      
+
+      // The server uses data.player; older clients used data.id.
+      const departedPlayerId = data.player || data.id;
+      if (!departedPlayerId) return;
+
       // Also clean up rate limiting data for this player
-      if (playerUpdateThrottleRef.current[data.id]) {
-        delete playerUpdateThrottleRef.current[data.id];
+      if (playerUpdateThrottleRef.current[departedPlayerId]) {
+        delete playerUpdateThrottleRef.current[departedPlayerId];
       }
-      
+
       setRemotePlayers(prev => {
-        if (!prev[data.id]) {
+        if (!prev[departedPlayerId]) {
           return prev;
         }
-        
+
         // Create a new object without this player
         const newPlayers = { ...prev };
-        delete newPlayers[playerId];
+        delete newPlayers[departedPlayerId];
         return newPlayers;
       });
-      // Also clean up live data
-      delete livePlayerData.current[playerId];
+      delete livePlayerData.current[departedPlayerId];
     };
     
     const handlePlayerUpdate = (data: any) => {
@@ -1728,6 +1792,14 @@ export const MultiplayerManager: React.FC<{
         : livePlayerData.current[data.id]?.rotation ?? 0;
       const flashlightOn = data.state?.flashlightOn ?? livePlayerData.current[data.id]?.flashlightOn ?? false;
       const cameraPitch = data.state?.cameraPitch ?? livePlayerData.current[data.id]?.cameraPitch ?? 0;
+      const droneActive = data.state?.droneActive ?? livePlayerData.current[data.id]?.droneActive ?? false;
+      const dronePosition = data.state?.dronePosition
+        ? arrayToObjectPosition(data.state.dronePosition)
+        : livePlayerData.current[data.id]?.dronePosition;
+      const droneRotation = data.state?.droneRotation
+        ? quaternionToAngle(data.state.droneRotation)
+        : livePlayerData.current[data.id]?.droneRotation;
+      const droneThermalActive = data.state?.droneThermalActive ?? livePlayerData.current[data.id]?.droneThermalActive ?? false;
 
       // Detect movement from position delta
       const prevLive = livePlayerData.current[data.id];
@@ -1748,7 +1820,8 @@ export const MultiplayerManager: React.FC<{
 
       // *** HOT PATH: write directly to ref store — NO React re-render ***
       // Preserve playerType from previous data or get from incoming data
-      const playerType = data.playerType || data.state?.playerType || prevLive?.playerType || 'merc';
+      const playerType = resolveRemotePlayerType(connectionManager, data, prevLive?.playerType);
+      if (!playerType) return;
       livePlayerData.current[data.id] = {
         position,
         rotation,
@@ -1759,14 +1832,25 @@ export const MultiplayerManager: React.FC<{
         isShooting: data.state?.isShooting ?? prevLive?.isShooting ?? false,
         lastUpdate: now,
         playerType,
+        droneActive,
+        dronePosition,
+        droneRotation,
+        droneThermalActive,
       };
 
       // *** COLD PATH: only trigger React for structural changes (new player) ***
       setRemotePlayers(prev => {
-        if (prev[data.id]) return prev; // Already known — skip re-render
+        const adventureAvatar = connectionManager.getGameMode() === 'adventure'
+          ? (data.state?.adventureAvatar === 'astronaut' ? 'astronaut' : data.state?.adventureAvatar === 'jackalope' ? 'jackalope' : prev[data.id]?.adventureAvatar || 'jackalope')
+          : 'jackalope';
+        if (prev[data.id]) {
+          if ((prev[data.id].adventureAvatar || 'jackalope') === adventureAvatar) return prev;
+          return { ...prev, [data.id]: { ...prev[data.id], adventureAvatar } };
+        }
 
         console.log(`Adding player ${data.id} from update - wasn't in our list`);
-        const newPlayerType = data.playerType || data.state?.playerType || 'merc';
+        const newPlayerType = resolveRemotePlayerType(connectionManager, data);
+        if (!newPlayerType) return prev;
         console.log(`🧩 New player ${data.id} assigned type: ${newPlayerType}`);
 
         return {
@@ -1777,10 +1861,15 @@ export const MultiplayerManager: React.FC<{
             rotation,
             lastUpdate: now,
             playerType: newPlayerType,
+            adventureAvatar,
             isMoving: false,
             isRunning: false,
             isShooting: false,
             flashlightOn,
+            droneActive,
+            dronePosition,
+            droneRotation,
+            droneThermalActive,
           }
         };
       });

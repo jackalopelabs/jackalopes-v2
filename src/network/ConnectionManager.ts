@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import entityStateObserver from './EntityStateObserver';
+import { getGameModeFromUrl, type GameMode } from '../game/game-mode';
 
 // Debug level enum
 enum LogLevel {
@@ -18,6 +19,10 @@ type GameState = {
     health: number;
     playerType: 'merc' | 'jackalope';
     flashlightOn: boolean;
+    droneActive?: boolean;
+    dronePosition?: [number, number, number];
+    droneRotation?: [number, number, number, number];
+    droneThermalActive?: boolean;
   }>;
 };
 
@@ -37,6 +42,10 @@ interface PlayerSnapshot {
   health: number;
   playerType: 'merc' | 'jackalope';
   flashlightOn: boolean;
+  droneActive?: boolean;
+  dronePosition?: [number, number, number];
+  droneRotation?: [number, number, number, number];
+  droneThermalActive?: boolean;
 }
 
 export class ConnectionManager extends EventEmitter {
@@ -62,6 +71,7 @@ export class ConnectionManager extends EventEmitter {
   // Connection storm prevention
   private isConnecting: boolean = false; // Guard against concurrent connect() calls
   private lastConnectTime: number = 0; // For debouncing connect() calls
+  private adventureAvatar: 'jackalope' | 'astronaut' = 'jackalope';
   private sessionJoined: boolean = false; // Only send player_update after join_success
   
   // Reconciliation metrics for debugging
@@ -85,6 +95,9 @@ export class ConnectionManager extends EventEmitter {
   
   // Store player character type
   private playerType: 'merc' | 'jackalope' = 'merc';
+
+  // Game modes use separate sessions so Adventure players never leak into Hunt matches.
+  private gameMode: GameMode = getGameModeFromUrl() || 'hunt';
   
   // Add player name property for identification
   private playerName: string | null = null;
@@ -427,8 +440,25 @@ export class ConnectionManager extends EventEmitter {
     this.isConnected = false;
     this.isConnecting = false;
     this.sessionJoined = false;
+    this.lastConnectTime = 0;
     this.emit('disconnected');
     this.log(LogLevel.INFO, 'Disconnected from server');
+  }
+
+  setGameMode(mode: GameMode): void {
+    if (this.gameMode === mode) return;
+
+    this.disconnect();
+    this.gameMode = mode;
+    this.playerType = mode === 'adventure' ? 'jackalope' : 'merc';
+    this.playerIndex = -1;
+    this.sessionJoined = false;
+    this.gameState = { players: {} };
+    this.lastConnectTime = 0;
+  }
+
+  getGameMode(): GameMode {
+    return this.gameMode;
   }
   
   // Starts a keep-alive interval to maintain the connection
@@ -619,10 +649,15 @@ export class ConnectionManager extends EventEmitter {
     velocity?: [number, number, number],
     sequence?: number,
     playerType?: 'merc' | 'jackalope',
+    adventureAvatar?: 'jackalope' | 'astronaut',
     flashlightOn?: boolean,
     cameraPitch?: number,
     isWalking?: boolean,
-    isRunning?: boolean
+    isRunning?: boolean,
+    droneActive?: boolean,
+    dronePosition?: [number, number, number],
+    droneRotation?: [number, number, number, number],
+    droneThermalActive?: boolean
   }): void {
     if (!this.isReadyToSend()) {
       this.log(LogLevel.WARN, 'Cannot send player update, WebSocket not ready');
@@ -635,6 +670,8 @@ export class ConnectionManager extends EventEmitter {
       return;
     }
     
+    if (updateData.adventureAvatar) this.adventureAvatar = updateData.adventureAvatar;
+
     // Determine which playerType to send
     const typeToSend = updateData.playerType || this.playerType || 'merc';
     
@@ -658,10 +695,15 @@ export class ConnectionManager extends EventEmitter {
           velocity: updateData.velocity || [0, 0, 0],
           sequence: updateData.sequence || Date.now(),
           playerType: typeToSend,
+          adventureAvatar: this.getGameMode() === 'adventure' ? this.adventureAvatar : undefined,
           flashlightOn: flashlightState,
           cameraPitch: updateData.cameraPitch || 0,
           isWalking: updateData.isWalking || false,
-          isRunning: updateData.isRunning || false
+          isRunning: updateData.isRunning || false,
+          droneActive: updateData.droneActive || false,
+          dronePosition: updateData.dronePosition,
+          droneRotation: updateData.droneRotation,
+          droneThermalActive: updateData.droneThermalActive || false
         }
       });
     } else {
@@ -674,13 +716,21 @@ export class ConnectionManager extends EventEmitter {
             rotation: updateData.rotation,
             health: 100,
             playerType: typeToSend, // Use explicit or default playerType
-            flashlightOn: flashlightState // Include flashlight state
+            flashlightOn: flashlightState, // Include flashlight state
+            droneActive: updateData.droneActive || false,
+            dronePosition: updateData.dronePosition,
+            droneRotation: updateData.droneRotation,
+            droneThermalActive: updateData.droneThermalActive || false
           };
         } else {
           this.gameState.players[this.playerId].position = updateData.position;
           this.gameState.players[this.playerId].rotation = updateData.rotation;
           this.gameState.players[this.playerId].playerType = typeToSend; // Use explicit or default playerType
           this.gameState.players[this.playerId].flashlightOn = flashlightState; // Include flashlight state
+          this.gameState.players[this.playerId].droneActive = updateData.droneActive || false;
+          this.gameState.players[this.playerId].dronePosition = updateData.dronePosition;
+          this.gameState.players[this.playerId].droneRotation = updateData.droneRotation;
+          this.gameState.players[this.playerId].droneThermalActive = updateData.droneThermalActive || false;
         }
       }
     }
@@ -796,6 +846,31 @@ export class ConnectionManager extends EventEmitter {
     // Also broadcast via localStorage for cross-browser testing
     if (window.location.hostname === 'localhost') {
       this.broadcastViaLocalStorage(mushroomData);
+    }
+  }
+
+  // Send a mushroom destroyed event so all clients remove the same mushroom
+  sendMushroomDestroyed(mushroomId: string): void {
+    if (!this.isReadyToSend()) {
+      this.log(LogLevel.WARN, 'Cannot send mushroom destroyed event, WebSocket not ready');
+      return;
+    }
+
+    const mushroomDestroyedData = {
+      type: 'game_event',
+      event: {
+        event_type: 'mushroom_destroyed',
+        mushroomId,
+        player_id: this.playerId,
+        timestamp: Date.now()
+      }
+    };
+
+    this.log(LogLevel.DEBUG, `Sending mushroom destroyed event for ${mushroomId}`);
+    this.send(mushroomDestroyedData);
+
+    if (window.location.hostname === 'localhost') {
+      this.broadcastViaLocalStorage(mushroomDestroyedData);
     }
   }
 
@@ -1051,6 +1126,15 @@ export class ConnectionManager extends EventEmitter {
               playerIndex: message.playerIndex
             });
           }
+
+          if (message.players && typeof message.players === 'object') {
+            Object.entries(message.players).forEach(([id, playerData]: [string, any]) => {
+              if (id === this.playerId) return;
+              this.gameState.players[id] = playerData;
+              this.emit('player_joined', { id, state: playerData, playerType: playerData.playerType });
+            });
+          }
+
           // Explicitly set connected state to true on successful auth
           this.isConnected = true;
           this.emit('initialized', { id: this.playerId, gameState: this.gameState });
@@ -1067,12 +1151,17 @@ export class ConnectionManager extends EventEmitter {
             this.log(LogLevel.INFO, 'Auth successful, joining session...');
             // Check URL for preferred role
             const urlParams = new URLSearchParams(window.location.search);
-            const preferredRole = urlParams.get('role');
+            const preferredRole = this.gameMode === 'adventure'
+              ? 'jackalope'
+              : urlParams.get('role');
             this.send({
               type: 'join_session',
               playerName: message.player.id,
-              sessionKey: 'JACKALOPES-TEST-SESSION',
-              preferredRole: preferredRole || undefined
+              sessionKey: this.gameMode === 'adventure'
+                ? 'JACKALOPES-ADVENTURE-SESSION'
+                : 'JACKALOPES-TEST-SESSION',
+              preferredRole: preferredRole || undefined,
+              gameMode: this.gameMode,
             });
           }
         }
@@ -1238,7 +1327,7 @@ export class ConnectionManager extends EventEmitter {
       
       // Get or create persistent player ID (unique per tab/role)
       const urlRole = new URLSearchParams(window.location.search).get('role') || 'default';
-      const storageKey = `jackalopes-player-id-${urlRole}`;
+      const storageKey = `jackalopes-player-id-${this.gameMode}-${urlRole}`;
       let persistentId = localStorage.getItem(storageKey);
       if (!persistentId) {
         persistentId = 'player_' + Math.random().toString(36).substr(2, 9);
@@ -1261,6 +1350,10 @@ export class ConnectionManager extends EventEmitter {
 
   // Add a public method to get player character type based on connection order
   getPlayerCharacterType(): { type: 'merc' | 'jackalope', thirdPerson: boolean } {
+    if (this.gameMode === 'adventure') {
+      return { type: 'jackalope', thirdPerson: true };
+    }
+
     // If server already assigned a type, use it directly
     if (this.playerType && this.playerIndex >= 0) {
       console.log(`🎮 Using server-assigned type: ${this.playerType} (index ${this.playerIndex})`);
@@ -1407,6 +1500,16 @@ export class ConnectionManager extends EventEmitter {
   // Add the missing methods
 
   private handleDisconnect(): void {
+    const hasActiveReplacementSocket = !!this.socket && (
+      this.socket.readyState === WebSocket.OPEN ||
+      this.socket.readyState === WebSocket.CONNECTING
+    );
+
+    if (hasActiveReplacementSocket) {
+      this.log(LogLevel.INFO, 'Ignoring disconnect from stale socket; a replacement connection already exists');
+      return;
+    }
+
     this.isConnected = false;
     this.emit('disconnected');
     this.log(LogLevel.INFO, 'Disconnected from server');
@@ -1421,9 +1524,12 @@ export class ConnectionManager extends EventEmitter {
     this.clearReconnectTimeout();
     
     // Try to reconnect
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+    if (!this.offlineMode && this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
-      setTimeout(() => this.connect(), this.reconnectInterval);
+      this.reconnectTimeout = window.setTimeout(() => {
+        this.reconnectTimeout = null;
+        this.connect();
+      }, this.reconnectInterval);
     }
   }
 
@@ -1495,15 +1601,9 @@ export class ConnectionManager extends EventEmitter {
 
   // Send a game snapshot
   sendGameSnapshot(snapshot: GameSnapshot): void {
-    if (!this.isReadyToSend()) {
-      this.log(LogLevel.INFO, 'Cannot send game snapshot: not connected to server');
-      return;
-    }
-    
-    this.send({
-      type: 'game_snapshot',
-      snapshot
-    });
+    // Snapshot sync is currently disabled for the standalone server.
+    // It does not consume these messages, and sending them just burns CPU/network.
+    return;
   }
 
   // Get snapshot at time (stub for compatibility)

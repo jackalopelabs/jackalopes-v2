@@ -33,7 +33,7 @@ interface AudioCommsPanelProps {
   connectionManager: ConnectionManager;
   enabled: boolean;
   playerType: 'merc' | 'jackalope';
-  position?: 'bottom-right' | 'right-center';
+  position?: 'bottom-right' | 'right-center' | 'top-right';
 }
 
 type VoiceSignalMessage = {
@@ -112,7 +112,9 @@ export const AudioCommsPanel: React.FC<AudioCommsPanelProps> = ({
   const currentScopeRef = useRef<ChatScope>('team');
   const accent = useMemo(() => playerType === 'merc' ? '#ff7a45' : '#60a5fa', [playerType]);
 
-  const panelPositionStyle = position === 'right-center'
+  const panelPositionStyle = position === 'top-right'
+    ? { right: 'max(12px, env(safe-area-inset-right))', top: 'max(12px, env(safe-area-inset-top))' }
+    : position === 'right-center'
     ? { right: '6px', top: '50%', transform: 'translateY(-50%)' }
     : { right: '20px', bottom: '20px' };
 
@@ -479,8 +481,9 @@ export const AudioCommsPanel: React.FC<AudioCommsPanelProps> = ({
         {panelOpen && (
           <div style={{
             position: 'absolute', right: 0,
-            bottom: position === 'right-center' ? 'calc(100% - 60px)' : '64px',
-            width: 390,
+            ...(position === 'top-right' ? { top: '64px' } : { bottom: position === 'right-center' ? 'calc(100% - 60px)' : '64px' }),
+            width: 'min(390px, calc(100vw - 24px))',
+            maxHeight: 'calc(100dvh - 100px)', overflowY: 'auto',
             background: 'linear-gradient(180deg, rgba(8,12,22,0.9) 0%, rgba(8,12,22,0.72) 100%)',
             borderRadius: 18,
             boxShadow: '0 20px 60px rgba(0,0,0,0.45)',
@@ -579,7 +582,7 @@ export const AudioCommsPanel: React.FC<AudioCommsPanelProps> = ({
         )}
 
         <button onClick={() => setPanelOpen(v => !v)} title={panelOpen ? 'Close comms' : 'Open comms'} style={{
-          width: 56, height: 56, borderRadius: 999, border: '1px solid transparent',
+          width: position === 'top-right' ? 44 : 56, height: position === 'top-right' ? 44 : 56, borderRadius: 999, border: '1px solid transparent',
           background: settings.muteAll ? 'linear-gradient(180deg, rgba(127,29,29,0.92) 0%, rgba(69,10,10,0.92) 100%)' : 'linear-gradient(180deg, rgba(15,23,42,0.92) 0%, rgba(2,6,23,0.92) 100%)',
           color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
           boxShadow: panelOpen ? `0 0 0 1px ${accent}55, 0 16px 40px rgba(0,0,0,0.45)` : '0 10px 30px rgba(0,0,0,0.35)', backdropFilter: 'blur(14px)', position: 'relative'

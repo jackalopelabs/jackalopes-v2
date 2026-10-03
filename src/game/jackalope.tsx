@@ -1,8 +1,14 @@
+import { adventureCombatState, type AdventureHit } from './adventure-combat-state'
+import { MercModel } from './MercModel'
 import Rapier from '@dimforge/rapier3d-compat'
-import { PerspectiveCamera, useKeyboardControls } from '@react-three/drei'
+import { Html, PerspectiveCamera, useKeyboardControls } from '@react-three/drei'
 import { useFrame, useThree } from '@react-three/fiber'
 import { CapsuleCollider, RigidBody, RigidBodyProps, useBeforePhysicsStep, useRapier } from '@react-three/rapier'
 import { useEffect, useRef, useState, useMemo, forwardRef, useImperativeHandle, useCallback } from 'react'
+import { useSwimming, swimVerticalVelocity } from './terrain/use-swimming'
+import { createWaterslide, canBoardWaterslide, sampleWaterslideRide } from './cave-waterslide'
+import { waterslideState } from './waterslide-state'
+import { loadTerrainLevel } from './terrain/level-document'
 import { useGamepad } from '../common/hooks/use-gamepad'
 import * as THREE from 'three'
 import { Component, Entity, EntityType } from './ecs'
@@ -23,6 +29,11 @@ declare global {
             flashlightOn?: boolean;
             levaPanelState?: 'open' | 'closed';
             debugLevel?: number;
+            inventory?: {
+                goldenEggs: number;
+                rainbowEggs: number;
+                greenNightVision: boolean;
+            };
             spawnManager?: {
                 baseSpawnX: number;
                 currentSpawnX: number;
@@ -41,6 +52,10 @@ declare global {
         __networkManager?: {
             sendRespawnRequest: (playerId: string, spawnPosition?: [number, number, number]) => void;
         };
+        __localPlayerPosition?: THREE.Vector3;
+        __localPlayerRotation?: number;
+        __localPlayerInteract?: boolean;
+        __lastLocalInteractAt?: number;
     }
 }
 
@@ -54,6 +69,18 @@ const RUN_MULTIPLIER = 1.8; // Keep this the same
 // Jump handling adjustments
 const JUMP_MULTIPLIER = 14.2; // Increased from 4 to make jumps higher
 const GRAVITY_REDUCTION = 1; // Increased from 0.5 to make jumps shorter
+const VOID_RECOVERY_Y = -160
+const _inputDirection = new THREE.Vector3()
+const _cameraDirection = new THREE.Vector3(0, 0, -1)
+const _cameraSide = new THREE.Vector3(1, 0, 0)
+const _moveDirection = new THREE.Vector3()
+const _networkRotationQuat = new THREE.Quaternion()
+const _networkRotationEuler = new THREE.Euler()
+const _jackalopePos2D = new THREE.Vector3()
+const _jackalopeMove2D = new THREE.Vector3()
+const _mercPos2D = new THREE.Vector3()
+const _toMerc = new THREE.Vector3()
+const _mercForward = new THREE.Vector3()
 
 // Props for the Jackalope component
 type JackalopeProps = RigidBodyProps & {
@@ -64,6 +91,8 @@ type JackalopeProps = RigidBodyProps & {
     connectionManager?: ConnectionManager
     visible?: boolean
     thirdPersonView?: boolean
+    adventureAvatar?: 'jackalope' | 'astronaut'
+    adventureMode?: boolean
 }
 
 // Keyboard controls type
@@ -74,6 +103,7 @@ type KeyControls = {
     right: boolean
     jump: boolean
     sprint: boolean
+    interact: boolean
 }
 
 export const Jackalope = forwardRef<EntityType, JackalopeProps>(({ 
@@ -83,12 +113,15 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
     jumpForce = 0.8, 
     connectionManager, 
     visible = false, 
-    thirdPersonView = false, 
+    thirdPersonView = false,
+    adventureMode = false,
+    adventureAvatar = 'jackalope', 
     ...props 
 }, ref) => {
     // Core references
     const jackalopeRef = useRef<EntityType>(null!)
     const jackalopeModelRef = useRef<THREE.Group>(null)
+    const jackalopeLeanRef = useRef<THREE.Group>(null)
     const fpModelRef = useRef<THREE.Group>(null)
     
     // Physics
@@ -100,6 +133,8 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
     const velocity = useRef(new THREE.Vector3())
     const rotation = useRef(0)
     const targetRotation = useRef(0)
+    const lastMercTakedownAt = useRef(0)
+    const recoveryPosition = useRef(new THREE.Vector3(-100, 7, 10))
     
     // Animation
     const animations = useRef({})
@@ -114,6 +149,29 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
 
     // For respawning
     const [isRespawning, setIsRespawning] = useState(false)
+    const [combatDead, setCombatDead] = useState(false)
+    const [flinchUntil, setFlinchUntil] = useState(0)
+    useEffect(() => {
+        if (!adventureMode) return
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const hit = (event: Event) => {
+            const detail = (event as CustomEvent<AdventureHit>).detail
+            if (detail.playerId !== connectionManager?.getPlayerId()) return
+            if (adventureAvatar === 'astronaut') { setFlinchUntil(Date.now() + 350); return }
+            if (Date.now() < adventureCombatState.immuneUntil) return
+            adventureCombatState.deadUntil = Date.now() + 1400
+            adventureCombatState.immuneUntil = Date.now() + 5000
+            setCombatDead(true)
+            timer = setTimeout(() => {
+                setCombatDead(false)
+                adventureCombatState.deadUntil = 0
+                window.dispatchEvent(new CustomEvent('player_respawned', { detail: {} }))
+            }, 1400)
+        }
+        window.addEventListener('jackalopes:adventure-hit', hit)
+        return () => { window.removeEventListener('jackalopes:adventure-hit', hit); if (timer) clearTimeout(timer); adventureCombatState.deadUntil = 0; setCombatDead(false) }
+    }, [adventureMode, adventureAvatar, connectionManager])
+
     const [isInvulnerable, setIsInvulnerable] = useState(false)
     const respawnEffectRef = useRef<boolean>(false)
     const respawnTargetPosition = useRef<THREE.Vector3 | null>(null); // Store target respawn position
@@ -122,6 +180,12 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
     const camera = useThree((state) => state.camera)
     const [, getKeyboardControls] = useKeyboardControls()
     const gamepadState = useGamepad()
+    const sampleSwimming = useSwimming(adventureMode)
+    const wasSwimming = useRef(false)
+    const slideLayout = useMemo(() => adventureMode ? createWaterslide(loadTerrainLevel()) : null, [adventureMode])
+    const slideRide = useRef<{ progress: number; elapsed: number; origin: THREE.Vector3 } | null>(null)
+    const slideInteractHeld = useRef(false)
+    useEffect(() => () => { slideRide.current = null; waterslideState.active = false }, [adventureMode])
     
     // Track last server sync
     const lastStateTime = useRef(0)
@@ -137,10 +201,12 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         
         // Set initial position from props - ensure we start higher above ground to avoid clipping
         if (props.position && Array.isArray(props.position)) {
-            position.current.set(props.position[0], props.position[1] + 2.0, props.position[2])
+            position.current.set(props.position[0], Math.max(props.position[1] + 2.0, 3.2), props.position[2])
+            recoveryPosition.current.copy(position.current)
         } else {
             // Default position if none provided - ensure we're high enough above ground
-            position.current.y = 3.0 
+            position.current.y = 3.2
+            recoveryPosition.current.copy(position.current)
         }
         
         // Set initial rigid body position if it exists
@@ -230,6 +296,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
             // If this was sent for our player ID, handle the respawn
             // Skip the propPlayerId check as it's causing problems
             if (localPlayerId) {
+                slideRide.current = null; waterslideState.active = false; velocity.current.set(0, 0, 0);
                 console.log('🐰 Jackalope processing respawn event', event.detail);
                 
                 // Use provided position from event, or use the spawnManager
@@ -358,7 +425,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         }
         
         // Check for collision with circle in center (only for jackalope players) - for scoring only
-        if (!isRespawning && !isInvulnerable && window.jackalopesGame?.playerType === 'jackalope') {
+        if (!adventureMode && !isRespawning && !isInvulnerable && window.jackalopesGame?.playerType === 'jackalope') {
             const circlePosition = new THREE.Vector3(0, 0.5, 0); // Center of circle
             const distanceToCircle = position.current.distanceTo(circlePosition);
             
@@ -447,43 +514,103 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
             }
         }
         
+        if (adventureMode && Date.now() < adventureCombatState.deadUntil) {
+            velocity.current.set(0, 0, 0)
+            window.__localPlayerInteract = false
+            return
+        }
         // --- Normal Movement Logic ---
         // Get input state
-        const { forward, backward, left, right, jump, sprint } = getKeyboardControls() as any
-        
+        const { forward, backward, left, right, jump, sprint, interact, swimDown } = getKeyboardControls() as any
+
+        // Cap a delayed render step so returning to the tab cannot fling the player.
+        delta = Math.min(delta, 0.05)
+        const surface = sampleSwimming(position.current, camera.getWorldPosition(_cameraDirection).y, gamepadState.connected)
+        const swimming = surface !== null
+        if (swimming !== wasSwimming.current) {
+            velocity.current.y = 0
+            hopTimer.current = 0
+            isHopping.current = false
+            if (swimming) {
+                characterController.current.disableSnapToGround()
+                characterController.current.disableAutostep()
+            } else {
+                characterController.current.enableSnapToGround(0.5)
+                characterController.current.enableAutostep(0.5, 0.05, true)
+            }
+            wasSwimming.current = swimming
+        }
+
         // Combine keyboard and gamepad
-        const moveForward = forward || (gamepadState?.leftStick?.y < 0)
-        const moveBackward = backward || (gamepadState?.leftStick?.y > 0)
-        const moveLeft = left || (gamepadState?.leftStick?.x < 0)
-        const moveRight = right || (gamepadState?.leftStick?.x > 0)
-        const isJumping = jump || gamepadState?.buttons?.jump
-        const isSprinting = sprint || gamepadState?.buttons?.leftStickPress
+        const keyboardX = (right ? 1 : 0) - (left ? 1 : 0)
+        const keyboardZ = (forward ? 1 : 0) - (backward ? 1 : 0)
+        const dpadX = (gamepadState?.buttons?.dpadRight ? 1 : 0) - (gamepadState?.buttons?.dpadLeft ? 1 : 0)
+        const dpadZ = (gamepadState?.buttons?.dpadUp ? 1 : 0) - (gamepadState?.buttons?.dpadDown ? 1 : 0)
+        const gamepadX = gamepadState?.leftStick?.x ?? 0
+        const gamepadZ = -(gamepadState?.leftStick?.y ?? 0)
+        // Edge-triggered jump (for initiating jump)
+        const jumpPressed = jump || gamepadState?.buttons?.jump
+        // Level-triggered jump held (for variable-height jumps)
+        const isJumpHeld = jump || (gamepadState.connected && gamepadState.buttons.jumpHeld)
+        const isJumping = jumpPressed // Use edge-triggered for jump initiation
+        const isSprinting = sprint || gamepadState?.buttons?.sprint
+        // Edge-triggered interact (for mushroom eating)
+        const interactPressed = interact || gamepadState?.buttons?.interact
+
+        const boardPressed = interactPressed && !slideInteractHeld.current
+        slideInteractHeld.current = !!interactPressed
+        if (slideLayout && !slideRide.current && !isRespawning && boardPressed && canBoardWaterslide(slideLayout, position.current)) {
+            slideRide.current = { progress: 0, elapsed: 0, origin: position.current.clone() }
+            waterslideState.active = true
+            velocity.current.set(0, 0, 0)
+        }
+
+        // Update global interact state for mushroom detection
+        window.__localPlayerInteract = interactPressed
+        if (interactPressed) {
+            window.__lastLocalInteractAt = Date.now()
+        }
+
+        // Dispatch interact event with player position for mushroom eating
+        if (interactPressed) {
+            window.dispatchEvent(new CustomEvent('jackalope_interact', {
+                detail: {
+                    position: position.current.clone(),
+                    playerId: connectionManager?.getPlayerId()
+                }
+            }))
+        }
         
         // Get movement direction from input
-        const inputDir = new THREE.Vector3(
-            (moveRight ? 1 : 0) - (moveLeft ? 1 : 0),
+        const inputDir = _inputDirection.set(
+            Math.max(-1, Math.min(1, keyboardX + dpadX + gamepadX)),
             0,
-            (moveForward ? 1 : 0) - (moveBackward ? 1 : 0)
-        ).normalize()
+            Math.max(-1, Math.min(1, keyboardZ + dpadZ + gamepadZ))
+        )
+
+        if (inputDir.lengthSq() > 1) {
+            inputDir.normalize()
+        }
         
         // Convert to camera-relative direction
-        const cameraDirection = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion)
+        const cameraDirection = _cameraDirection.set(0, 0, -1).applyQuaternion(camera.quaternion)
         cameraDirection.y = 0 // Keep movement horizontal
         cameraDirection.normalize()
         
-        const cameraSide = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion)
+        const cameraSide = _cameraSide.set(1, 0, 0).applyQuaternion(camera.quaternion)
         cameraSide.y = 0
         cameraSide.normalize()
         
         // Calculate movement in camera space
-        const moveDirection = new THREE.Vector3()
+        const moveDirection = _moveDirection.set(0, 0, 0)
         
         if (inputDir.z !== 0 || inputDir.x !== 0) {
             moveDirection
                 .addScaledVector(cameraDirection, inputDir.z)
                 .addScaledVector(cameraSide, inputDir.x)
                 .normalize()
-            
+
+            // Rotate to face movement direction, matching keyboard/WASD feel.
             targetRotation.current = Math.atan2(moveDirection.x, moveDirection.z) + Math.PI
         }
         
@@ -495,7 +622,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         
         if (hasMovementInput) {
             // Calculate speed
-            const speed = BASE_SPEED * (isSprinting ? RUN_MULTIPLIER : 1.0)
+            const speed = swimming ? (isSprinting ? 6.5 : 4.5) : BASE_SPEED * (isSprinting ? RUN_MULTIPLIER : 1.0)
             
             // Apply horizontal movement
             velocity.current.x = moveDirection.x * speed
@@ -506,7 +633,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
             
             // Auto-hopping system when moving
             hopTimer.current += delta
-            if (hopTimer.current >= hopInterval.current && groundCheck) {
+            if (!swimming && hopTimer.current >= hopInterval.current && groundCheck) {
                 // Time to hop - apply upward velocity if we're on the ground
                 // Make hops faster and lower during sprinting for a quick-hopping effect
                 velocity.current.y = jumpForce * hopHeight.current
@@ -534,6 +661,13 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
             }
         }
         
+        if (surface !== null) {
+            const down = swimDown || (gamepadState.connected && gamepadState.buttons.swimDown)
+            const verticalInput = Number(!!isJumpHeld) - Number(!!down)
+            velocity.current.y = swimVerticalVelocity(position.current.y, surface, verticalInput, velocity.current.y, delta)
+            isHopping.current = false
+            hopTimer.current = 0
+        } else {
         // Jump handling
         if (isJumping && groundCheck) {
             velocity.current.y = jumpForce * JUMP_MULTIPLIER
@@ -548,11 +682,41 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
             velocity.current.y = 0 // Stop falling if on ground
         }
         
+        }
+
         // Create a target position including the desired movement
         const targetPosition = position.current.clone().add(
             velocity.current.clone().multiplyScalar(delta)
         )
         
+        // A boarded rider follows the open flume's centre rail. Ordinary movement and
+        // network/model updates remain shared; only collision steering is bypassed on the ride.
+        const riding = slideRide.current && slideLayout
+        if (riding) {
+            const ride = slideRide.current!
+            ride.elapsed += delta
+            const speed = THREE.MathUtils.lerp(8, 15, Math.min(1, ride.elapsed / 2))
+            ride.progress = Math.min(1, ride.progress + speed * delta / slideLayout!.length)
+            const sample = sampleWaterslideRide(slideLayout!, ride.progress)
+            const blend = THREE.MathUtils.smoothstep(ride.elapsed, 0, 0.35)
+            targetPosition.lerpVectors(ride.origin, sample.position, blend)
+            velocity.current.copy(targetPosition).sub(position.current).divideScalar(Math.max(delta, 0.001))
+            targetRotation.current = sample.heading
+            waterslideState.heading = sample.heading
+            hopTimer.current = 0
+            isHopping.current = false
+            setAnimation('idle')
+            if (ride.progress === 1) {
+                slideRide.current = null
+                waterslideState.active = false
+                velocity.current.multiplyScalar(0.2)
+                velocity.current.y = 0
+                window.dispatchEvent(new CustomEvent('jackalopes:slide-splash', { detail: {
+                    position: [sample.position.x, slideLayout!.waterLevel, sample.position.z],
+                } }))
+            }
+        }
+
         // Handle collision with the character controller
         const rigidBody = jackalopeRef.current.rigidBody
         const collider = rigidBody.collider(0)
@@ -565,39 +729,114 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         }
         
         // Check for valid collision movement
-        characterController.current.computeColliderMovement(collider, movement)
-        const safeMovement = characterController.current.computedMovement()
+        if (!riding) characterController.current.computeColliderMovement(collider, movement)
+        const safeMovement = riding ? movement : characterController.current.computedMovement()
         
         // Apply the safe movement to our position
         position.current.x += safeMovement.x
         position.current.y += safeMovement.y
         position.current.z += safeMovement.z
-        
-        // Prevent falling below ground level (y=0)
-        if (position.current.y < 1.0) {
-            position.current.y = 1.0
-            
-            // If we hit the ground or fall below it, ensure we bounce back up slightly
-            // This helps prevent the jackalope from disappearing under the ground
-            velocity.current.y = 0.5; // Small upward bounce
-            console.log("[JACKALOPE] Preventing fall through ground - applying safety bounce");
+
+        // No direct player-vs-player push here.
+        // Player colliders are sensors, so hard blocking is gone.
+        // Keeping this disabled avoids the invisible force-field feel around the merc.
+
+        // Let the player genuinely fall off the map. Only recover after they have dropped
+        // well below the Great Valley, and return them to a valid spawn rather than keeping
+        // their out-of-bounds X/Z coordinates on an invisible floor.
+        if (position.current.y < VOID_RECOVERY_Y) {
+            position.current.copy(recoveryPosition.current)
+            velocity.current.set(0, 0, 0)
+            respawnEffectRef.current = true
         }
         
         // Sync the physics body to our position
         rigidBody.setNextKinematicTranslation(position.current)
+
+        // Update global player position and rotation for mushroom proximity detection and decoy spawning
+        window.__localPlayerPosition = position.current
+        window.__localPlayerRotation = rotation.current
+
+        if (
+            connectionManager?.isReadyToSend?.() &&
+            !isRespawning &&
+            !isInvulnerable &&
+            hasMovementInput &&
+            isSprinting &&
+            Date.now() - lastMercTakedownAt.current > 900
+        ) {
+            const livePlayers = (window as any).__livePlayerData || {}
+            _jackalopePos2D.set(position.current.x, 0, position.current.z)
+            _jackalopeMove2D.set(velocity.current.x, 0, velocity.current.z)
+
+            if (_jackalopeMove2D.lengthSq() > 0.04) {
+                _jackalopeMove2D.normalize()
+
+                for (const [mercId, playerData] of Object.entries(livePlayers) as Array<[string, any]>) {
+                    if (playerData?.playerType !== 'merc' || !playerData?.position) continue
+
+                    _mercPos2D.set(playerData.position.x, 0, playerData.position.z)
+                    _toMerc.subVectors(_mercPos2D, _jackalopePos2D)
+                    const distance = _toMerc.length()
+                    if (distance < 0.001 || distance > 3.6) continue
+
+                    _toMerc.normalize()
+                    _mercForward.set(
+                        Math.sin(playerData.rotation || 0),
+                        0,
+                        Math.cos(playerData.rotation || 0)
+                    ).normalize()
+
+                    const behindFactor = _mercForward.dot(_toMerc)
+                    const pursuitFactor = _jackalopeMove2D.dot(_toMerc)
+                    if (behindFactor < 0.45 || pursuitFactor < 0.45) continue
+
+                    connectionManager.sendMessage({
+                        type: 'game_event',
+                        event: {
+                            event_type: 'player_respawn',
+                            respawnId: `merc-takedown-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+                            player_id: mercId,
+                            requestedBy: connectionManager.getPlayerId(),
+                            timestamp: Date.now(),
+                            spawnPosition: [10, 7, 10],
+                            playerType: 'merc',
+                            source: 'jackalope_sprint_takedown'
+                        }
+                    })
+
+                    lastMercTakedownAt.current = Date.now()
+
+                    if (window.__createExplosionEffect) {
+                        window.__createExplosionEffect(
+                            new THREE.Vector3(playerData.position.x, playerData.position.y ?? 3, playerData.position.z),
+                            '#ff6a00',
+                            18,
+                            0.18
+                        )
+                    }
+
+                    break
+                }
+            }
+        }
         
-        // Add failsafe - if model is too low or appears to have fallen through the floor, reset position
+        // Only repair corrupted positions here. Normal negative Y values are real falling now.
         if (visible && thirdPersonView && jackalopeModelRef.current) {
             const modelY = jackalopeModelRef.current.position.y;
-            if (modelY < -10 || modelY > 1000) {
+            if (!Number.isFinite(modelY) || modelY > 1000) {
                 console.log(`[JACKALOPE] Model position out of bounds (y=${modelY.toFixed(2)}), resetting position`);
-                position.current.y = 3.0;
+                position.current.copy(recoveryPosition.current);
                 velocity.current.set(0, 0, 0);
                 jackalopeModelRef.current.position.y = position.current.y - 2.15;
                 rigidBody.setNextKinematicTranslation(position.current);
             }
         }
         
+        if (adventureMode && adventureAvatar === 'astronaut' && Date.now() < adventureCombatState.aimingUntil) {
+            rotation.current = adventureCombatState.aimHeading
+            targetRotation.current = adventureCombatState.aimHeading
+        }
         // Smoothly rotate the model to face the movement direction
         const rotDiff = Math.atan2(
             Math.sin(targetRotation.current - rotation.current),
@@ -609,54 +848,24 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         
         // 1. Third-person model
         if (jackalopeModelRef.current && thirdPersonView) {
-            // Update model position directly
+            // Outer group handles world position and yaw only.
             jackalopeModelRef.current.position.set(
                 position.current.x,
-                position.current.y - 2.15, // Reduce height offset to lower the model
+                position.current.y - 2.15,
                 position.current.z
             )
-            
-            // Apply additional height adjustment for sprint leaning
-            let heightOffset = 0;
-            if (animation === 'run') {
-                // When leaning at 45 degrees while sprinting, the model lifts up
-                // Add extra downward offset to compensate - this keeps feet on ground
-                heightOffset = 0.5; // Adjust this value as needed based on testing
-                jackalopeModelRef.current.position.y -= heightOffset;
-            }
-            
-            // BUGFIX: Apply animation-specific offset to maintain consistent pivot
-            // When running/sprinting, adjust the Z position to counter the pivot shift
-            if (animation === 'run') {
-                // Apply a negative Z offset to counteract the forward-shifting pivot during sprinting
-                // This makes the model rotate around its visual center consistently regardless of animation
-                const sprintOffset = -0.3; // This value may need adjustment based on testing
-                jackalopeModelRef.current.position.z += sprintOffset;
-            }
-            
-            // Apply forward leaning based on animation state
-            // Walking: 22.5 degrees forward lean
-            // Running: 45 degrees forward lean
-            // Idle: No lean (0 degrees)
-            const walkLean = 22.5 * (Math.PI / 180); // Convert 22.5 degrees to radians
-            const sprintLean = 45 * (Math.PI / 180); // Convert 45 degrees to radians
-            
-            // Set the lean amount based on animation state
-            const leanAmount = animation === 'walk' ? walkLean : (animation === 'run' ? sprintLean : 0);
-            
-            // SIMPLER APPROACH - Using Euler angles in the correct order
-            // This avoids quaternion composition issues
-            
-            // First apply Y rotation to match character orientation
-            jackalopeModelRef.current.rotation.set(0, rotation.current + Math.PI, 0);
-            
-            // Then apply X rotation for forward lean
-            if (animation === 'walk' || animation === 'run') {
-                // Apply lean directly on the x-axis (forward tilt) after y rotation
-                jackalopeModelRef.current.rotateX(leanAmount);
-            } else if (jackalopeModelRef.current.rotation.x > 0.01) {
-                // Gradually return to upright when idle
-                jackalopeModelRef.current.rotation.x = Math.max(0, jackalopeModelRef.current.rotation.x - (0.1 * delta));
+            jackalopeModelRef.current.rotation.set(0, rotation.current + Math.PI, 0)
+
+            // Inner group handles local forward lean around a cleaner pivot.
+            if (jackalopeLeanRef.current) {
+                const walkLeanDeg = 10
+                const sprintLeanDeg = 18
+                const walkLean = walkLeanDeg * (Math.PI / 180)
+                const sprintLean = sprintLeanDeg * (Math.PI / 180)
+                const leanAmount = waterslideState.active ? -0.18 : animation === 'walk' ? walkLean : (animation === 'run' ? sprintLean : 0)
+
+                jackalopeLeanRef.current.position.set(0, 0, 0)
+                jackalopeLeanRef.current.rotation.set(leanAmount, 0, 0)
             }
             
             // Debug - occasionally log rotation to verify leaning is correct
@@ -700,8 +909,8 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
             lastStateTime.current = Date.now()
             
             // Create rotation quaternion for network
-            const rotationQuat = new THREE.Quaternion().setFromEuler(
-                new THREE.Euler(0, rotation.current, 0)
+            const rotationQuat = _networkRotationQuat.setFromEuler(
+                _networkRotationEuler.set(0, rotation.current, 0)
             )
             
             connectionManager.sendPlayerUpdate({
@@ -709,7 +918,10 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
                 rotation: [rotationQuat.x, rotationQuat.y, rotationQuat.z, rotationQuat.w],
                 velocity: [velocity.current.x, velocity.current.y, velocity.current.z],
                 sequence: Date.now(),
-                playerType: 'jackalope'
+                playerType: 'jackalope',
+                adventureAvatar: adventureMode ? adventureAvatar : undefined,
+                isWalking: animation === 'walk',
+                isRunning: animation === 'run'
             })
         }
         
@@ -723,15 +935,9 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
             onMove(position.current);
         }
 
-        // Ensure the model is always visible by directly setting its visibility
+        // Keep the root model visible without per-frame scene traversal
         if (jackalopeModelRef.current) {
-            // Force visibility of all child objects
-            jackalopeModelRef.current.traverse((child) => {
-                if (child.type === 'Mesh') {
-                    const mesh = child as THREE.Mesh;
-                    mesh.visible = true;
-                }
-            });
+            jackalopeModelRef.current.visible = true;
         }
     })
     
@@ -810,7 +1016,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
                         name="jackalope-player"
                     >
                         <object3D name="jackalope" />
-                        <CapsuleCollider args={[1.0, 0.5]} position={[0, -0.65, 0]} />
+                        <CapsuleCollider args={[0.85, 0.35]} position={[0, -0.65, 0]} sensor />
                     </RigidBody>
                 </Component>
             </Entity>
@@ -842,22 +1048,27 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
             )}
             
             {/* Third person model - create with initial position to avoid flashing */}
-            {visible && thirdPersonView && (
+            {visible && thirdPersonView && !combatDead && (
                 <group 
                     ref={jackalopeModelRef} 
                     scale={[2, 2, 2]}
                     position={[position.current.x, position.current.y - 2.15, position.current.z]}
                     rotation={[0, rotation.current + Math.PI, 0]}
                 >
-                    <JackalopeModel
-                        animation={animation}
-                        visible={visible}
-                        // Note: we don't pass position/rotation as props anymore
-                        // The parent group will be manipulated directly in useFrame
-                    />
+                    <group ref={jackalopeLeanRef}>
+                        {adventureMode && adventureAvatar === 'astronaut' ? <group name="adventure-astronaut">
+                            <MercModel adventureStyle flinchUntil={flinchUntil} animation={animation} scale={[1.8, 1.8, 1.8]} />
+                        </group> : <JackalopeModel
+                            animation={animation}
+                            visible={visible}
+                            // Note: we don't pass position/rotation as props anymore
+                            // The parent group will be manipulated directly in useFrame
+                        />}
+                    </group>
                 </group>
             )}
             
+            {combatDead && <Html fullscreen style={{ pointerEvents: 'none', display: 'grid', placeItems: 'center' }}><div role="status" data-testid="adventure-knocked-out" style={{ padding: 18, borderRadius: 12, background: '#241814dd', color: '#ffe4ce', fontFamily: 'system-ui' }}>You were hit · Respawning…</div></Html>}
             {/* Invulnerability shield effect */}
             {isInvulnerable && (
                 <mesh position={[position.current.x, position.current.y, position.current.z]}>

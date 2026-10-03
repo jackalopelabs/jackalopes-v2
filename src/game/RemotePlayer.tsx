@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useImperativeHandle, forwardRef, useMemo, useCallback } from 'react';
 import * as THREE from 'three';
-import { Html, Billboard, Text, Clone, useGLTF } from '@react-three/drei';
+import { Html, Clone, useGLTF } from '@react-three/drei';
 import { useFrame, RootState } from '@react-three/fiber';
 import { Points, BufferGeometry, NormalBufferAttributes, Material } from 'three';
 import { MercModelPath, JackalopeModelPath } from '../assets'; // Import model paths instead of components
@@ -10,6 +10,7 @@ import { RigidBody, CapsuleCollider, BallCollider, CuboidCollider } from '@react
 import { MercModel } from './MercModel';
 import { JackalopeModel } from './JackalopeModel';
 import entityStateObserver from '../network/EntityStateObserver'; // Import entityStateObserver
+import './PlayerMarker.css';
 
 // Add window type declaration at the top of the file with all custom properties
 declare global {
@@ -36,10 +37,15 @@ interface RemotePlayerData {
   isRunning?: boolean;
   isShooting?: boolean;
   flashlightOn?: boolean; // Add flashlight state
+  droneActive?: boolean;
+  dronePosition?: { x: number, y: number, z: number };
+  droneRotation?: number;
+  droneThermalActive?: boolean;
 }
 
 // Interface for RemotePlayer props
 export interface RemotePlayerProps {
+  adventureAvatar?: 'jackalope' | 'astronaut';
   playerId: string;
   position: THREE.Vector3;
   rotation: number;
@@ -49,6 +55,10 @@ export interface RemotePlayerProps {
   isShooting?: boolean;
   flashlightOn?: boolean; // Add flashlight state
   cameraPitch?: number; // Camera pitch for flashlight vertical aim
+  droneActive?: boolean;
+  dronePosition?: { x: number, y: number, z: number };
+  droneRotation?: number;
+  droneThermalActive?: boolean;
   audioListener?: THREE.AudioListener;
 }
 
@@ -56,6 +66,61 @@ export interface RemotePlayerProps {
 export interface RemotePlayerMethods {
   updateTransform: (position: [number, number, number], rotation: [number, number, number, number]) => void;
 }
+
+const PlayerMarker = ({
+  playerId,
+  playerType,
+  position,
+  height,
+  visible = true,
+}: {
+  playerId: string;
+  playerType: 'merc' | 'jackalope';
+  position: { x: number; y: number; z: number };
+  height: number;
+  visible?: boolean;
+}) => {
+  const markerRef = useRef<THREE.Group>(null);
+  const labelRef = useRef<HTMLSpanElement>(null);
+  const distanceRef = useRef<HTMLSpanElement>(null);
+
+  useFrame(({ camera }) => {
+    if (!markerRef.current) return;
+
+    const livePosition = (window as any).__livePlayerData?.[playerId]?.position || position;
+    markerRef.current.position.set(livePosition.x, livePosition.y + height, livePosition.z);
+
+    const gameMode = window.jackalopesGame?.gameMode;
+    const localPlayerType = window.jackalopesGame?.playerType;
+    markerRef.current.visible = visible && (
+      gameMode === 'adventure' || localPlayerType === playerType
+    );
+
+    if (markerRef.current.visible && distanceRef.current) {
+      distanceRef.current.textContent = `${Math.round(camera.position.distanceTo(markerRef.current.position))}m`;
+    }
+    if (markerRef.current.visible && labelRef.current) {
+      labelRef.current.textContent = gameMode === 'adventure' ? 'FRIEND' : 'TEAM';
+    }
+  });
+
+  return (
+    <group ref={markerRef}>
+      <Html center zIndexRange={[120, 20]} style={{ pointerEvents: 'none' }}>
+        <div className={`player-marker${playerType === 'merc' ? ' player-marker--merc' : ''}`}>
+          <span className="player-marker__beacon">
+            <span className="player-marker__pulse" />
+            <span className="player-marker__diamond" />
+          </span>
+          <span className="player-marker__meta">
+            <span ref={labelRef}>TEAM</span>
+            <span ref={distanceRef} className="player-marker__distance">--m</span>
+          </span>
+        </div>
+      </Html>
+    </group>
+  );
+};
 
 // FlamethrowerFlame component for the particle effect
 const FlamethrowerFlame = () => {
@@ -156,13 +221,25 @@ const PilotLight = () => {
 
 // Remote Player Component
 export const RemotePlayer: React.FC<RemotePlayerProps> = ({ 
-  playerId, position, rotation, playerType = 'merc', isMoving, isRunning, isShooting, flashlightOn, cameraPitch = 0, audioListener
+  playerId, position, rotation, adventureAvatar = 'jackalope', playerType = 'merc', isMoving, isRunning, isShooting, flashlightOn, cameraPitch = 0, droneActive, dronePosition, droneRotation, droneThermalActive, audioListener
 }) => {
   // Add debug logging for player type
   if (isDebugEnabled(DEBUG_LEVELS.INFO)) {
     log.player(`RemotePlayer ${playerId} rendering with playerType: ${playerType || 'undefined'}`);
   }
   
+  const [combatFlinchUntil, setCombatFlinchUntil] = useState(0);
+  const [combatHidden, setCombatHidden] = useState(false);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const hit = (event: Event) => {
+      if ((event as CustomEvent).detail?.playerId !== playerId) return;
+      if (adventureAvatar === 'astronaut') setCombatFlinchUntil(Date.now() + 350);
+      else { setCombatHidden(true); if (timer) clearTimeout(timer); timer = setTimeout(() => setCombatHidden(false), 1400); }
+    };
+    window.addEventListener('jackalopes:adventure-hit', hit);
+    return () => { window.removeEventListener('jackalopes:adventure-hit', hit); if (timer) clearTimeout(timer); setCombatHidden(false); };
+  }, [playerId, adventureAvatar]);
   const groupRef = useRef<THREE.Group>(null);
   const meshRef = useRef<THREE.Mesh>(null);
   const mercRigidBodyRef = useRef<any>(null);
@@ -172,6 +249,8 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
   const flashlightGroupRef = useRef<THREE.Group>(null);
   const flashlightGlowRef = useRef<THREE.Mesh>(null); // Visible glow source for the flashlight
   const flashlightPointLightRef = useRef<THREE.PointLight>(null); // Point light for fog penetration
+  const droneGroupRef = useRef<THREE.Group>(null);
+  const thermalGroupRef = useRef<THREE.Group>(null);
   const lastAnimationChangeTime = useRef<number>(Date.now());
   const pendingAnimationChange = useRef<string | null>(null);
   const lastPosition = useRef<THREE.Vector3 | null>(null);
@@ -192,6 +271,10 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
   const latestIsMovingRef = useRef<boolean>(isMoving || false);
   const latestIsRunningRef = useRef<boolean>(isRunning || false);
   const latestFlashlightRef = useRef<boolean>(flashlightOn || false);
+  const latestDroneActiveRef = useRef<boolean>(droneActive || false);
+  const latestDronePositionRef = useRef<{ x: number, y: number, z: number } | undefined>(dronePosition);
+  const latestDroneRotationRef = useRef<number>(droneRotation || 0);
+  const latestDroneThermalRef = useRef<boolean>(droneThermalActive || false);
 
   // Sync from live store every render (synchronous, before useFrame)
   const liveStore = (window as any).__livePlayerData;
@@ -203,6 +286,10 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     latestIsMovingRef.current = live.isMoving;
     latestIsRunningRef.current = live.isRunning;
     latestFlashlightRef.current = live.flashlightOn;
+    latestDroneActiveRef.current = live.droneActive || false;
+    latestDronePositionRef.current = live.dronePosition;
+    latestDroneRotationRef.current = live.droneRotation || 0;
+    latestDroneThermalRef.current = live.droneThermalActive || false;
   } else {
     latestPositionRef.current = position;
     latestRotationRef.current = rotation || 0;
@@ -210,6 +297,10 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     latestIsMovingRef.current = isMoving || false;
     latestIsRunningRef.current = isRunning || false;
     latestFlashlightRef.current = flashlightOn || false;
+    latestDroneActiveRef.current = droneActive || false;
+    latestDronePositionRef.current = dronePosition;
+    latestDroneRotationRef.current = droneRotation || 0;
+    latestDroneThermalRef.current = droneThermalActive || false;
   }
   
   const MIN_ANIMATION_CHANGE_INTERVAL = 200; // ms
@@ -611,6 +702,10 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
       latestRotationRef.current = fLive.rotation;
       latestCameraPitchRef.current = fLive.cameraPitch;
       latestFlashlightRef.current = fLive.flashlightOn;
+      latestDroneActiveRef.current = fLive.droneActive || false;
+      latestDronePositionRef.current = fLive.dronePosition;
+      latestDroneRotationRef.current = fLive.droneRotation || 0;
+      latestDroneThermalRef.current = fLive.droneThermalActive || false;
     }
 
     const isFlashlightOn = latestFlashlightRef.current;
@@ -667,6 +762,27 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
     );
     spotlightTargetRef.current.updateMatrixWorld();
     spotlightRef.current.target = spotlightTargetRef.current;
+
+    if (droneGroupRef.current) {
+      const hasDronePosition = !!latestDronePositionRef.current;
+      droneGroupRef.current.visible = hasDronePosition;
+      if (hasDronePosition && latestDronePositionRef.current) {
+        droneGroupRef.current.position.set(
+          latestDronePositionRef.current.x,
+          latestDronePositionRef.current.y,
+          latestDronePositionRef.current.z
+        );
+        droneGroupRef.current.rotation.set(0, latestDroneRotationRef.current, 0);
+      }
+    }
+
+    if (thermalGroupRef.current) {
+      thermalGroupRef.current.visible = !!window.jackalopesGame?.droneThermalActive;
+      const thermalPos = latestPositionRef.current;
+      if (thermalPos) {
+        thermalGroupRef.current.position.set(thermalPos.x, thermalPos.y, thermalPos.z);
+      }
+    }
   });
 
   // Common component for all player types with explicit states
@@ -720,14 +836,14 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
           ccd={true}
           collisionGroups={0xFFFFFFFF}
         >
-          {/* Use multiple colliders for better hit detection - scale up for larger model */}
-          <CapsuleCollider args={[7.5, 4]} position={[0, 7.5, 0]} sensor={false} />
+          {/* Keep merc hit volumes tight so jackalopes can actually close distance. */}
+          <CapsuleCollider args={[3.9, 1.25]} position={[0, 4.2, 0]} sensor={true} />
           
-          {/* Add a box collider to ensure hits register */}
-          <CuboidCollider args={[4, 7.5, 4]} position={[0, 7.5, 0]} sensor={false} />
+          {/* Add a smaller torso box for reliable hit registration without the old force field. */}
+          <CuboidCollider args={[1.5, 3.9, 1.5]} position={[0, 4.2, 0]} sensor={true} />
           
-          {/* Add a collider for the head area */}
-          <BallCollider args={[3]} position={[0, 12.5, 0]} sensor={false} />
+          {/* Add a tighter head collider */}
+          <BallCollider args={[1.35]} position={[0, 9.4, 0]} sensor={true} />
           
           {/* Use primitive for the model */}
           <MercModel 
@@ -735,6 +851,7 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
             rotation={[0, 0, 0]} 
             scale={[5, 5, 5]}
             animation={localIsRunning ? 'run' : localIsMoving ? 'walk' : 'idle'}
+            thermalActive={!!window.jackalopesGame?.droneThermalActive}
           />
           
         </RigidBody>
@@ -750,7 +867,7 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
             angle={0.7}
             penumbra={0.5}
             decay={1.2}
-            castShadow
+            castShadow={false}
           />
           <object3D ref={spotlightTargetRef} />
         </group>
@@ -771,24 +888,42 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
           distance={20}
           decay={1.5}
         />
-        {/* Player ID tag - positioned higher for the taller merc model */}
-        <Html position={[position?.x || 0, (position?.y || 0) + 12, position?.z || 0]} center>
-          {/* Only show nametag if this player is on the same team as the local player */}
-          {window.jackalopesGame?.playerType === 'merc' && (
-            <div style={{ 
-              background: 'rgba(0,0,0,0.5)', 
-              padding: '2px 6px', 
-              borderRadius: '4px', 
-              color: 'white',
-              fontSize: '14px', // Slightly smaller font to match 5x scale
-              fontFamily: 'Arial, sans-serif'
-            }}>
-              {playerId?.split('-')[0]}
-            </div>
-          )}
-        </Html>
+        <PlayerMarker playerId={playerId} playerType="merc" position={position} height={10} />
         {/* Add spatial audio for remote merc player */}
         {audioComponent}
+        <group ref={thermalGroupRef} visible={false} />
+        <group ref={droneGroupRef} visible={false}>
+            <mesh castShadow receiveShadow>
+              <boxGeometry args={[0.82, 0.24, 0.58]} />
+              <meshStandardMaterial color="#1f2937" metalness={0.45} roughness={0.28} emissive="#0ea5e9" emissiveIntensity={0.25} />
+            </mesh>
+            <mesh castShadow receiveShadow position={[0, 0.08, 0]}>
+              <boxGeometry args={[1.45, 0.04, 0.08]} />
+              <meshStandardMaterial color="#67e8f9" emissive="#0ea5e9" emissiveIntensity={0.6} />
+            </mesh>
+            <mesh castShadow receiveShadow position={[0, 0.08, 0]} rotation={[0, Math.PI / 2, 0]}>
+              <boxGeometry args={[1.15, 0.04, 0.08]} />
+              <meshStandardMaterial color="#67e8f9" emissive="#0ea5e9" emissiveIntensity={0.6} />
+            </mesh>
+            {[
+              [0.55, 0.1, 0.42],
+              [-0.55, 0.1, 0.42],
+              [0.55, 0.1, -0.42],
+              [-0.55, 0.1, -0.42],
+            ].map((propPos, index) => (
+              <group key={index} position={propPos as [number, number, number]}>
+                <mesh castShadow receiveShadow>
+                  <cylinderGeometry args={[0.06, 0.06, 0.05, 12]} />
+                  <meshStandardMaterial color="#111827" metalness={0.55} roughness={0.3} />
+                </mesh>
+                <mesh rotation={[0, index * 0.3, 0]}>
+                  <boxGeometry args={[0.55, 0.015, 0.06]} />
+                  <meshBasicMaterial color="#d1fae5" transparent opacity={0.8} toneMapped={false} />
+                </mesh>
+              </group>
+            ))}
+            <pointLight color="#7dd3fc" intensity={3.2} distance={14} decay={1.7} />
+          </group>
       </>
     );
   }
@@ -1253,37 +1388,24 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
         {!isHit && (
           <group
             ref={jackalopeModelGroupRef}
+            visible={!combatHidden}
             scale={[2, 2, 2]}
             position={position ? [position.x, position.y - 2.15, position.z] : [0, -2.15, 0]}
             rotation={[0, (rotation || 0) + Math.PI, 0]}
           >
-            <JackalopeModel
-              position={[0, 0, 0]}
-              rotation={[0, 0, 0]}
-              scale={[1, 1, 1]}
-            />
+            {adventureAvatar === 'astronaut' ? <group name="remote-adventure-astronaut">
+              <MercModel adventureStyle flinchUntil={combatFlinchUntil} animation={localIsRunning ? 'run' : localIsMoving ? 'walk' : 'idle'} scale={[1.8, 1.8, 1.8]} />
+            </group> : <JackalopeModel position={[0, 0, 0]} rotation={[0, 0, 0]} scale={[1, 1, 1]} />}
           </group>
         )}
         
-        {/* Player ID tag - only show when not hit/respawning */}
-        {!isHit && !isRespawning && (
-          <Html position={[position?.x || 0, (position?.y || 0) + 5, position?.z || 0]} center>
-            {/* Only show nametag if this player is on the same team as the local player */}
-            {window.jackalopesGame?.playerType === 'jackalope' && (
-              <div style={{ 
-                background: 'rgba(0,0,0,0.5)', 
-                padding: '2px 6px', 
-                borderRadius: '4px', 
-                color: 'white',
-                fontSize: '12px', // Larger font to match the increased size
-                fontFamily: 'Arial, sans-serif'
-              }}>
-                {playerId?.split('-')[0]}
-                {isInvulnerable && ' (Invulnerable)'}
-              </div>
-            )}
-          </Html>
-        )}
+        <PlayerMarker
+          playerId={playerId}
+          playerType="jackalope"
+          position={position}
+          height={5}
+          visible={!isHit && !isRespawning}
+        />
         
         {/* Add spatial audio for remote jackalope player */}
         {!isHit && !isRespawning && audioComponent}
@@ -1331,12 +1453,13 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
   console.warn(`⚠️ RemotePlayer ${playerId} hit FALLBACK renderer! playerType='${playerType}'`);
 
   return (
-    <group 
-      ref={groupRef}
-      position={[position.x, position.y, position.z]}
-      rotation={[0, rotation, 0]}
-      name={`remote-player-${playerId}`}
-    >
+    <>
+      <group
+        ref={groupRef}
+        position={[position.x, position.y, position.z]}
+        rotation={[0, rotation, 0]}
+        name={`remote-player-${playerId}`}
+      >
       {/* Debug visuals */}
       {isDebugEnabled(DEBUG_LEVELS.VERBOSE) && (
         <mesh>
@@ -1369,32 +1492,17 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
         )}
       </mesh>
       
-      {/* Character nameplate - only show for teammates */}
-      {window.jackalopesGame?.playerType === playerType && (
-        <Billboard
-          position={[0, playerType === 'merc' ? 7 : 2.2, 0]} // Adjust based on player type
-          follow={true}
-          lockX={false}
-          lockY={false}
-          lockZ={false}
-        >
-          <Text
-            fontSize={playerType === 'merc' ? 0.5 : 0.2} // Larger text for merc to be readable
-            color="#ffffff"
-            anchorX="center"
-            anchorY="middle"
-            outlineWidth={0.02}
-            outlineColor="#000000"
-          >
-            {playerId?.split('-')[0]} 
-            {playerType === 'jackalope' ? ' (Jackalope)' : ' (Merc)'}
-          </Text>
-        </Billboard>
-      )}
-      
-      {/* Add spatial audio for remote fallback player */}
-      {audioComponent}
-    </group>
+        {/* Add spatial audio for remote fallback player */}
+        {audioComponent}
+      </group>
+
+      <PlayerMarker
+        playerId={playerId}
+        playerType={playerType}
+        position={position}
+        height={playerType === 'merc' ? 10 : 5}
+      />
+    </>
   );
 };
 

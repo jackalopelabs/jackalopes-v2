@@ -757,9 +757,85 @@ const Sphere = ({ id, position, direction, color, radius, isStuck: initialIsStuc
                     // No handler found for this jackalope
                     console.log(`No hit handler found for jackalope ${jackalopeId}`);
                 }
-            } else {
-                // STANDARD COLLISION HANDLING FOR NON-JACKALOPE OBJECTS
-                
+            }
+
+            // CHECK FOR MUSHROOM COLLISION
+            const isMushroomByUserData = targetUserData?.isMushroom === true || parentUserData?.isMushroom === true;
+            const isMushroomCollision = isMushroomByUserData || targetName.includes('mushroom') || parentName.includes('mushroom');
+
+            if (isMushroomCollision) {
+                const mushroomId = targetUserData?.mushroomId || parentUserData?.mushroomId;
+                console.log(`[SPHERE] Hit mushroom ${mushroomId}!`);
+
+                if (mushroomId && window.__mushroomDestroyHandlers?.[mushroomId]) {
+                    window.__mushroomDestroyHandlers[mushroomId]();
+                    console.log(`[SPHERE] Mushroom ${mushroomId} destroyed!`);
+                    window.connectionManager?.sendMushroomDestroyed?.(mushroomId);
+
+                    // Play mushroom destroy sound
+                    if (window.__playMushroomDestroySound) {
+                        window.__playMushroomDestroySound();
+                    }
+
+                    // Hide projectile immediately
+                    if (groupRef.current) {
+                        groupRef.current.visible = false;
+                    }
+
+                    // Disable rigid body
+                    if (rigidBodyRef.current) {
+                        rigidBodyRef.current.setEnabled(false);
+                        rigidBodyRef.current.setBodyType(1, false);
+                        rigidBodyRef.current.setTranslation({ x: 0, y: -9999, z: 0 }, false);
+                    }
+
+                    setFinalPosition([-9999, -9999, -9999]);
+                    stuckRef.current = true;
+                    setStuck(true);
+                    collisionTimeRef.current = Date.now();
+                    return;
+                }
+            }
+
+            // CHECK FOR DECOY COLLISION
+            const isDecoyByUserData = targetUserData?.isDecoy === true || parentUserData?.isDecoy === true;
+            const isDecoyCollision = isDecoyByUserData || targetName.includes('decoy') || parentName.includes('decoy');
+
+            if (isDecoyCollision) {
+                const decoyId = targetUserData?.decoyId || parentUserData?.decoyId;
+                console.log(`[SPHERE] Hit decoy ${decoyId}!`);
+
+                if (decoyId && window.__decoyDestroyHandlers?.[decoyId]) {
+                    window.__decoyDestroyHandlers[decoyId]();
+                    console.log(`[SPHERE] Decoy ${decoyId} destroyed!`);
+
+                    // Play mushroom destroy sound (same sound for decoys)
+                    if (window.__playMushroomDestroySound) {
+                        window.__playMushroomDestroySound();
+                    }
+
+                    // Hide projectile immediately
+                    if (groupRef.current) {
+                        groupRef.current.visible = false;
+                    }
+
+                    // Disable rigid body
+                    if (rigidBodyRef.current) {
+                        rigidBodyRef.current.setEnabled(false);
+                        rigidBodyRef.current.setBodyType(1, false);
+                        rigidBodyRef.current.setTranslation({ x: 0, y: -9999, z: 0 }, false);
+                    }
+
+                    setFinalPosition([-9999, -9999, -9999]);
+                    stuckRef.current = true;
+                    setStuck(true);
+                    collisionTimeRef.current = Date.now();
+                    return;
+                }
+            }
+
+            // STANDARD COLLISION HANDLING FOR NON-JACKALOPE/MUSHROOM/DECOY OBJECTS
+            {
                 // Get current position from the collision point
                 const position = rigidBodyRef.current.translation();
                 
@@ -993,6 +1069,7 @@ const Sphere = ({ id, position, direction, color, radius, isStuck: initialIsStuc
                 mass={0.3} // Even lower mass
                 ccd={true}
                 onCollisionEnter={handleCollision}
+                onIntersectionEnter={handleCollision}
                 linearVelocity={stuck ? [0, 0, 0] : [direction[0] * SHOOT_FORCE, direction[1] * SHOOT_FORCE, direction[2] * SHOOT_FORCE]}
                 type={stuck ? "fixed" : "dynamic"}
                 gravityScale={0.3} // Reduce gravity effect
@@ -1046,12 +1123,14 @@ export const SphereTool = ({
     onShoot,
     remoteShots = [],
     thirdPersonView = false,
-    playerPosition = null // Add optional player position for third-person shooting
+    playerPosition = null, // Add optional player position for third-person shooting
+    allowLocalShooting = true
 }: { 
     onShoot?: (origin: [number, number, number], direction: [number, number, number]) => void,
     remoteShots?: RemoteShot[],
     thirdPersonView?: boolean,
-    playerPosition?: THREE.Vector3 | null
+    playerPosition?: THREE.Vector3 | null,
+    allowLocalShooting?: boolean
 }) => {
     const sphereRadius = 0.15 // Slightly larger size for fireballs
     const MAX_AMMO = 50
@@ -1217,6 +1296,10 @@ export const SphereTool = ({
     const localPlayerIdRef = useRef<string>(`local_player_${Math.random().toString(36).substring(2, 11)}`);
 
     const shootSphere = () => {
+        if (!allowLocalShooting) {
+            return;
+        }
+
         // Modified check for pointer lock to work in both first-person and third-person modes
         const firstPersonMode = !thirdPersonView && document.pointerLockElement !== null;
         const thirdPersonMode = thirdPersonView; // Always allow shooting in third-person mode
@@ -1392,6 +1475,7 @@ export const SphereTool = ({
     }
 
     const startShooting = () => {
+        if (!allowLocalShooting) return;
         if (shootCooldownRef.current) return;
         
         isPointerDown.current = true
@@ -1411,30 +1495,41 @@ export const SphereTool = ({
         isPointerDown.current = false
         if (shootingInterval.current) {
             clearInterval(shootingInterval.current)
+            shootingInterval.current = null
         }
     }
 
     // Add a cooldown ref to prevent rapid firing
     const shootCooldownRef = useRef(false);
 
+    const mouseShootHeld = useRef(false);
+    // Both touch and physical triggers are sampled every frame, not only on React renders.
+    useFrame(() => {
+        const held = allowLocalShooting && (mouseShootHeld.current || gamepadState.buttons.shoot);
+        if (held && !isPointerDown.current) startShooting();
+        else if (!held && isPointerDown.current) stopShooting();
+    });
+
     useEffect(() => {
-        window.addEventListener('pointerdown', startShooting)
-        window.addEventListener('pointerup', stopShooting)
-        
-        // Handle gamepad shooting
-        if (gamepadState.buttons.shoot) {
-            if (!isPointerDown.current) {
-                startShooting()
-            }
-        } else if (isPointerDown.current) {
-            stopShooting()
-        }
-        
+        const down = (event: PointerEvent) => {
+            if (event.pointerType === 'touch' || event.button !== 0 ||
+                (event.target instanceof Element && event.target.closest('button, a, input, [data-touch-controls]'))) return;
+            mouseShootHeld.current = true;
+        };
+        const up = () => { mouseShootHeld.current = false; };
+        const reset = () => { up(); stopShooting(); };
+        window.addEventListener('pointerdown', down);
+        window.addEventListener('pointerup', up);
+        window.addEventListener('pointercancel', reset);
+        window.addEventListener('blur', reset);
         return () => {
-            window.removeEventListener('pointerdown', startShooting)
-            window.removeEventListener('pointerup', stopShooting)
-        }
-    }, [camera, gamepadState.buttons.shoot])
+            window.removeEventListener('pointerdown', down);
+            window.removeEventListener('pointerup', up);
+            window.removeEventListener('pointercancel', reset);
+            window.removeEventListener('blur', reset);
+            reset();
+        };
+    }, []);
 
     // Show ammo counter
     useEffect(() => {
@@ -1479,9 +1574,10 @@ export const SphereTool = ({
                     });
                     
                     console.log(`Cleaned up ${removedSphereIds.length} old spheres and their lights. Remaining: ${filteredSpheres.length}`);
+                    return filteredSpheres;
                 }
                 
-                return filteredSpheres;
+                return prev;
             });
             
             // Also clean up processed shots to keep memory usage low
@@ -1597,6 +1693,9 @@ declare global {
         __createExplosionEffect?: (position: THREE.Vector3, color: string, particleCount: number, radius: number) => void;
         __createSpawnEffect?: (position: THREE.Vector3, color: string, particleCount: number, radius: number) => void;
         __lastHitJackalope?: string; // Track which jackalope was last hit
+        __mushroomDestroyHandlers?: Record<string, () => void>;
+        __decoyDestroyHandlers?: Record<string, () => void>;
+        __playMushroomDestroySound?: () => void;
         __networkManager?: {
             sendRespawnRequest: (playerId: string, spawnPosition?: [number, number, number]) => void;
         };

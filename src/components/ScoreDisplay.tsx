@@ -300,6 +300,16 @@ export const ScoreDisplay: React.FC<ScoreDisplayProps> = ({
       window.removeEventListener('host_timer_full_sync', handleFullTimerSync as EventListener);
     };
   }, [resetTimer, isHost]);
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('jackalopes_timer_tick', {
+      detail: {
+        timeRemaining,
+        timestamp: Date.now(),
+        isHost: isHostRef.current,
+      }
+    }));
+  }, [timeRemaining]);
   
   // Add an additional effect to force sync when host status changes
   useEffect(() => {

@@ -166,6 +166,17 @@ export const Sounds = {
       mp3: '/audio/merc-running.mp3',
       get path() { return getAudioPath(this.ogg, this.mp3); }
     },
+    // Jackalope footsteps (use same as merc for now)
+    JackalopeWalking: {
+      ogg: '/audio/merc-walking.ogg',
+      mp3: '/audio/merc-walking.mp3',
+      get path() { return getAudioPath(this.ogg, this.mp3); }
+    },
+    JackalopeRunning: {
+      ogg: '/audio/merc-running.ogg',
+      mp3: '/audio/merc-running.mp3',
+      get path() { return getAudioPath(this.ogg, this.mp3); }
+    },
   },
   // Weapon sounds
   Weapons: {
@@ -173,6 +184,13 @@ export const Sounds = {
       ogg: '/audio/merc-shot.ogg',
       mp3: '/audio/merc-shot.mp3',
       get path() { return getAudioPath(this.ogg, this.mp3); }
+    },
+  },
+  // Interaction sounds
+  Interactions: {
+    MushroomEat: {
+      mp3: '/audio/mushroom-eat.mp3',
+      get path() { return this.mp3; }
     },
   }
 };
