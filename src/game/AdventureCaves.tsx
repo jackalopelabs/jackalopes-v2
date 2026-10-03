@@ -6,6 +6,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { caveCeilingAt, caveFloorAt, createCaveGeometries } from './adventure-caves'
 import { CaveKoi } from './CaveKoi'
 import { CaveWaterslide } from './CaveWaterslide'
+import { EverlyCaveRoom } from './EverlyCaveRoom'
 import { loadTerrainLevel } from './terrain/level-document'
 
 type Placement = { at: [number, number, number]; scale: [number, number, number]; turn?: number }
@@ -249,6 +250,7 @@ export function AdventureCaves({ surfaceMaterial }: { surfaceMaterial?: THREE.Ma
     </RigidBody>
     <CaveWaterslide />
     <CaveKoi waterLevel={cave.waterLevel} />
+    <EverlyCaveRoom level={level} />
 
     <mesh name="cave-lake-water" geometry={cave.water} material={waterMaterial} dispose={null}
       renderOrder={4} userData={{ holographicSkip: true }} raycast={() => {}} />
