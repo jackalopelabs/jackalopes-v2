@@ -33,6 +33,8 @@ Daddy's bed sits in the opposite back-right corner, with a dark walnut frame, na
 
 An oval natural-rock hot tub sits along the back wall between the bedroom corners, with mineral-stained stone, rippling turquoise water, gentle steam, submerged seats, and stepping stones into and out of the shallow basin. The rim, steps, seats, and basin floor are solid; the water is shallow enough to stand in. Reduced-motion preferences pause the ripples and steam, and the ordinary lake route stays open.
 
+A cedar sauna sits to the right of the hot tub. Walk through its open glass door to tiered benches, warm amber lighting, a stone heater, and a wooden bucket and ladle. Its floor, walls, roof, glass, benches, and heater are solid, and there is room to pass between the sauna, hot tub, and Daddy's bed.
+
 Hunt retains its original central scoring circle. Cave geometry is a runtime Adventure overlay: it opens only the central four terrain cells, restores their surface around the entrance, and leaves the shared editor document unchanged. Existing surface swimming and pickups remain in place. Underground water is a bounded Adventure-only volume, separate from the terrain editor water level. The same keyboard, gamepad, and contextual touch swimming controls work in the lake.
 
 ## Features
