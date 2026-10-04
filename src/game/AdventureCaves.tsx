@@ -8,6 +8,7 @@ import { CaveKoi } from './CaveKoi'
 import { CaveWaterslide } from './CaveWaterslide'
 import { EverlyCaveRoom } from './EverlyCaveRoom'
 import { DaddyCaveRoom } from './DaddyCaveRoom'
+import { CaveHotTub } from './CaveHotTub'
 import { loadTerrainLevel } from './terrain/level-document'
 
 type Placement = { at: [number, number, number]; scale: [number, number, number]; turn?: number }
@@ -253,6 +254,7 @@ export function AdventureCaves({ surfaceMaterial }: { surfaceMaterial?: THREE.Ma
     <CaveKoi waterLevel={cave.waterLevel} />
     <EverlyCaveRoom level={level} />
     <DaddyCaveRoom level={level} />
+    <CaveHotTub level={level} />
 
     <mesh name="cave-lake-water" geometry={cave.water} material={waterMaterial} dispose={null}
       renderOrder={4} userData={{ holographicSkip: true }} raycast={() => {}} />
