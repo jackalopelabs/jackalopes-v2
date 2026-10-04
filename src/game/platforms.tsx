@@ -17,6 +17,7 @@ import { AdventureCaves } from './AdventureCaves'
 import { cutCaveMouth } from './adventure-caves'
 import { cutRabbitHole } from './rabbit-hole-opening'
 import { WaterSurface } from './terrain/WaterSurface'
+import { terrainFormations, NORTH_MOUNTAIN_RANGE } from './terrain-formations'
 
 type BoxDimensions = [width: number, height: number, depth: number]
 
@@ -604,45 +605,10 @@ export function Platforms({ holographicVision = false, adventureStyle = false }:
             ))}
             
             {/* Terrain features - rock formations in forest and desert areas (before valley) */}
-            {[
-                // Forest perimeter features (near the tree line)
-                { position: [0, -0.5, -90], scale: 3.0, height: 10, zone: 'forest' },
-                { position: [90, -0.5, 0], scale: 2.5, height: 8, zone: 'forest' },
-                { position: [0, -0.5, 90], scale: 3.0, height: 10, zone: 'forest' },
-                { position: [-90, -0.5, 0], scale: 2.5, height: 8, zone: 'forest' },
-
-                // Digital Desert rock formations (scattered mesas and buttes)
-                { position: [130, -0.5, 0], scale: 4.0, height: 18, zone: 'desert' },
-                { position: [-130, -0.5, 0], scale: 4.0, height: 18, zone: 'desert' },
-                { position: [0, -0.5, 130], scale: 4.0, height: 18, zone: 'desert' },
-                { position: [0, -0.5, -130], scale: 4.0, height: 18, zone: 'desert' },
-
-                // Desert corner formations
-                { position: [120, -0.5, 120], scale: 3.5, height: 15, zone: 'desert' },
-                { position: [-120, -0.5, 120], scale: 3.5, height: 15, zone: 'desert' },
-                { position: [120, -0.5, -120], scale: 3.5, height: 15, zone: 'desert' },
-                { position: [-120, -0.5, -120], scale: 3.5, height: 15, zone: 'desert' },
-
-                // Smaller desert outcrops
-                { position: [160, -0.5, 60], scale: 2.5, height: 10, zone: 'desert' },
-                { position: [-160, -0.5, -60], scale: 2.5, height: 10, zone: 'desert' },
-                { position: [60, -0.5, -160], scale: 2.5, height: 10, zone: 'desert' },
-                { position: [-60, -0.5, 160], scale: 2.5, height: 10, zone: 'desert' },
-
-                // Mesa formations near the valley edge (these will look like cliffs)
-                { position: [200, -0.5, 0], scale: 5.0, height: 25, zone: 'desert' },
-                { position: [-200, -0.5, 0], scale: 5.0, height: 25, zone: 'desert' },
-                { position: [0, -0.5, 200], scale: 5.0, height: 25, zone: 'desert' },
-                { position: [0, -0.5, -200], scale: 5.0, height: 25, zone: 'desert' },
-
-                // Diagonal edge formations
-                { position: [150, -0.5, 150], scale: 4.5, height: 22, zone: 'desert' },
-                { position: [-150, -0.5, -150], scale: 4.5, height: 22, zone: 'desert' },
-                { position: [-150, -0.5, 150], scale: 4.5, height: 22, zone: 'desert' },
-                { position: [150, -0.5, -150], scale: 4.5, height: 22, zone: 'desert' },
-            ].map((feature, idx) => (
+            {terrainFormations(adventureStyle).map((feature, idx) => (
                 <RigidBody
                     key={`terrain-feature-${idx}`}
+                    name={`terrain-feature-${idx}`}
                     type="fixed"
                     position={feature.position as [number, number, number]}
                     colliders="hull"
@@ -806,17 +772,10 @@ export function Platforms({ holographicVision = false, adventureStyle = false }:
             {/* Add mountain ranges around the map boundary to create a natural barrier */}
             
             {/* North mountain range */}
-            <MountainRange 
-                position={[0, 0, -150]}
-                count={8}
-                spread={200}
-                baseScale={1.5}
-                scaleVariation={0.4}
-                heightVariation={0.5}
-            />
+            <MountainRange {...NORTH_MOUNTAIN_RANGE} adventureStyle={adventureStyle} />
             
             {/* Northeast mountains */}
-            <MountainRange 
+            <MountainRange adventureStyle={adventureStyle}
                 position={[130, 0, -130]}
                 count={4}
                 spread={80}
@@ -826,7 +785,7 @@ export function Platforms({ holographicVision = false, adventureStyle = false }:
             />
             
             {/* East mountain range */}
-            <MountainRange 
+            <MountainRange adventureStyle={adventureStyle}
                 position={[150, 0, 0]}
                 count={6}
                 spread={160}
@@ -836,7 +795,7 @@ export function Platforms({ holographicVision = false, adventureStyle = false }:
             />
             
             {/* Southeast mountains */}
-            <MountainRange 
+            <MountainRange adventureStyle={adventureStyle}
                 position={[130, 0, 130]}
                 count={4}
                 spread={70}
@@ -846,7 +805,7 @@ export function Platforms({ holographicVision = false, adventureStyle = false }:
             />
             
             {/* South mountain range */}
-            <MountainRange 
+            <MountainRange adventureStyle={adventureStyle}
                 position={[0, 0, 150]}
                 count={8}
                 spread={200}
@@ -856,7 +815,7 @@ export function Platforms({ holographicVision = false, adventureStyle = false }:
             />
             
             {/* Southwest mountains */}
-            <MountainRange 
+            <MountainRange adventureStyle={adventureStyle}
                 position={[-130, 0, 130]}
                 count={4}
                 spread={80}
@@ -866,7 +825,7 @@ export function Platforms({ holographicVision = false, adventureStyle = false }:
             />
             
             {/* West mountain range */}
-            <MountainRange 
+            <MountainRange adventureStyle={adventureStyle}
                 position={[-150, 0, 0]}
                 count={6}
                 spread={160}
@@ -876,7 +835,7 @@ export function Platforms({ holographicVision = false, adventureStyle = false }:
             />
             
             {/* Northwest mountains */}
-            <MountainRange 
+            <MountainRange adventureStyle={adventureStyle}
                 position={[-130, 0, -130]}
                 count={4}
                 spread={70}

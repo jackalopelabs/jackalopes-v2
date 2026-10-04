@@ -10,11 +10,12 @@ await RAPIER.init()
 const compiled = await build({ stdin: { contents: `
   export * from './src/game/cave-rabbit-hole'; export * from './src/game/rabbit-hole-opening';
   export * from './src/game/adventure-caves'; export * from './src/game/cave-hot-tub';
-  export * from './src/game/terrain/level-document';
+  export * from './src/game/terrain/level-document'; export * from './src/game/terrain-formations';
+  export * from './src/game/mountain-geometry';
 `, resolveDir: process.cwd() }, bundle: true, format: 'esm', platform: 'node', write: false })
 const { createRabbitHoleGeometries, RABBIT_HOLE_POSITION, RABBIT_HOLE_RADIUS, RABBIT_STEP_MAX_RISE,
   cutRabbitHole, isInRabbitHoleShaft, createCaveGeometries, cutCaveMouth, createHotTubGeometries, CAVE_HOT_TUB_POSITION,
-  createTerrainLevel, normalizeTerrainLevel, TERRAIN_SIZE, TERRAIN_SEGMENTS, terrainHeightAtVertex } =
+  createTerrainLevel, normalizeTerrainLevel, TERRAIN_SIZE, TERRAIN_SEGMENTS, terrainHeightAtVertex, terrainFormations, NORTH_MOUNTAIN_RANGE, mountainRangeLayout, createMountainGeometry } =
   await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
 const savedBytes = readFileSync(new URL('./fixtures/adventure-valley.json', import.meta.url), 'utf8')
 const savedLevel = () => normalizeTerrainLevel(JSON.parse(savedBytes))
@@ -58,7 +59,7 @@ test('small roof and surface openings preserve surrounding sculpted terrain tria
 })
 
 for (const [name, makeLevel, fps = 60] of [['default terrain', createTerrainLevel], ['saved terrain', savedLevel],
-  ['saved terrain at 30 FPS', savedLevel, 30],
+  ['saved terrain at 30 FPS', savedLevel, 30], ['saved terrain at the game’s 120 Hz physics', savedLevel, 120],
   ['raised terrain', () => { const level = savedLevel(); level.heightOffsets = level.heightOffsets.map(h => h + 10); return level }]]) {
   test(`Rapier bunny hops every stone from behind the hot tub onto ${name} and can return`, () => {
     const level = makeLevel(), snapshot = JSON.stringify(level), hole = createRabbitHoleGeometries(level)
@@ -73,6 +74,30 @@ for (const [name, makeLevel, fps = 60] of [['default terrain', createTerrainLeve
     }
     for (const key of ['surface', 'floor', 'ramp', 'walls', 'ceiling']) addMesh(cave[key])
     addMesh(terrain); addMesh(hole.shaft); addMesh(hole.collar)
+    // Include every solid rock formation from Platforms, especially the mesa whose
+    // underside previously sealed the staircase even though both roof cuts were open.
+    for (const feature of terrainFormations(true)) {
+      const mesa = new THREE.ConeGeometry(feature.scale * 10, feature.height, 8)
+      world.createCollider(RAPIER.ColliderDesc.convexHull(new Float32Array(mesa.attributes.position.array))
+        .setTranslation(...feature.position))
+      mesa.dispose()
+    }
+    // North-range mountains formerly used full boxes, another invisible ceiling
+    // inside the chimney. Exercise the same cut geometry and collider selection.
+    for (const mountain of mountainRangeLayout(NORTH_MOUNTAIN_RANGE)) {
+      const { geometry, rabbitHoleCut } = createMountainGeometry(mountain, true)
+      geometry.scale(mountain.scale, mountain.scale, mountain.scale)
+        .translate(...mountain.position)
+      if (rabbitHoleCut) addMesh(geometry)
+      else {
+        geometry.computeBoundingBox()
+        const center = geometry.boundingBox.getCenter(new THREE.Vector3())
+        const half = geometry.boundingBox.getSize(new THREE.Vector3()).multiplyScalar(.5)
+        world.createCollider(RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z)
+          .setTranslation(center.x, center.y, center.z))
+      }
+      geometry.dispose()
+    }
     const { floor, top, steps, exit } = hole.layout, { x, z } = RABBIT_HOLE_POSITION
     for (const points of hole.treadPoints) world.createCollider(RAPIER.ColliderDesc.convexHull(points))
     world.createCollider(RAPIER.ColliderDesc.cylinder((top - floor - .6) / 2, .48)

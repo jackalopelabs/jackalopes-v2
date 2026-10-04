@@ -48,16 +48,29 @@ export function subtractRabbitHole<T extends readonly number[]>(polygon: T[], fo
 
 /** Precise runtime cut: preserve original terrain slopes and interpolate their UVs. */
 export function cutRabbitHole(terrain: THREE.BufferGeometry): void {
+  cutOpening(terrain, point => [point[0], -point[1]])
+}
+
+/** Cut scenery already transformed into world coordinates, including vertical faces. */
+export function cutRabbitHoleWorld(geometry: THREE.BufferGeometry, clearance = 0): void {
+  const ratio = RABBIT_HOLE_RADIUS / (RABBIT_HOLE_RADIUS + clearance)
+  const { x, z } = RABBIT_HOLE_POSITION
+  cutOpening(geometry, point => [x + (point[0] - x) * ratio, z + (point[2] - z) * ratio])
+}
+
+function cutOpening(terrain: THREE.BufferGeometry, footprint: (point: number[]) => FootprintPoint): void {
   const source = terrain.index ? terrain.toNonIndexed() : terrain.clone()
   const positions = source.getAttribute('position'), uv = source.getAttribute('uv')
   const output: number[] = [], texcoords: number[] = []
   for (let i = 0; i < positions.count; i += 3) {
     const triangle = [i, i + 1, i + 2].map(index => [positions.getX(index), positions.getY(index),
       positions.getZ(index), uv?.getX(index) ?? 0, uv?.getY(index) ?? 0])
-    for (const piece of subtractRabbitHole(triangle, p => [p[0], -p[1]])) {
+    for (const piece of subtractRabbitHole(triangle, footprint)) {
       for (let j = 1; j < piece.length - 1; j++) {
         const [a, b, c] = [piece[0], piece[j], piece[j + 1]]
-        if (Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) < 1e-9) continue
+        const ab = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2])
+        const ac = new THREE.Vector3(c[0] - a[0], c[1] - a[1], c[2] - a[2])
+        if (ab.cross(ac).lengthSq() < 1e-18) continue
         for (const point of [a, b, c]) { output.push(...point.slice(0, 3)); texcoords.push(...point.slice(3)) }
       }
     }
