@@ -13,6 +13,9 @@ export type WaterslideLayout = {
   start: THREE.Vector3
   end: THREE.Vector3
   waterLevel: number
+  halfWidth?: number
+  segments?: number
+  rideSpeed?: number
 }
 
 type Position = { x: number; y: number; z: number }

@@ -7,7 +7,8 @@ import { CapsuleCollider, RigidBody, RigidBodyProps, useBeforePhysicsStep, useRa
 import { CHARACTER_CAPSULE } from './character-physics'
 import { useEffect, useRef, useState, useMemo, forwardRef, useImperativeHandle, useCallback } from 'react'
 import { useSwimming, swimVerticalVelocity } from './terrain/use-swimming'
-import { createWaterslide, canBoardWaterslide, sampleWaterslideRide } from './cave-waterslide'
+import { createWaterslide, canBoardWaterslide, sampleWaterslideRide, type WaterslideLayout } from './cave-waterslide'
+import { createSpiralWaterslide } from './cave-rabbit-hole'
 import { waterslideState } from './waterslide-state'
 import { loadTerrainLevel } from './terrain/level-document'
 import { useGamepad } from '../common/hooks/use-gamepad'
@@ -183,8 +184,12 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
     const gamepadState = useGamepad()
     const sampleSwimming = useSwimming(adventureMode)
     const wasSwimming = useRef(false)
-    const slideLayout = useMemo(() => adventureMode ? createWaterslide(loadTerrainLevel()) : null, [adventureMode])
-    const slideRide = useRef<{ progress: number; elapsed: number; origin: THREE.Vector3 } | null>(null)
+    const slideLayouts = useMemo(() => {
+        if (!adventureMode) return []
+        const level = loadTerrainLevel()
+        return [createWaterslide(level), createSpiralWaterslide(level)]
+    }, [adventureMode])
+    const slideRide = useRef<{ layout: WaterslideLayout; progress: number; elapsed: number; origin: THREE.Vector3 } | null>(null)
     const slideInteractHeld = useRef(false)
     useEffect(() => () => { slideRide.current = null; waterslideState.active = false }, [adventureMode])
     
@@ -560,8 +565,9 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
 
         const boardPressed = interactPressed && !slideInteractHeld.current
         slideInteractHeld.current = !!interactPressed
-        if (slideLayout && !slideRide.current && !isRespawning && boardPressed && canBoardWaterslide(slideLayout, position.current)) {
-            slideRide.current = { progress: 0, elapsed: 0, origin: position.current.clone() }
+        const boardingSlide = boardPressed ? slideLayouts.find(layout => canBoardWaterslide(layout, position.current)) : undefined
+        if (boardingSlide && !slideRide.current && !isRespawning && boardPressed) {
+            slideRide.current = { layout: boardingSlide, progress: 0, elapsed: 0, origin: position.current.clone() }
             waterslideState.active = true
             velocity.current.set(0, 0, 0)
         }
@@ -692,13 +698,13 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         
         // A boarded rider follows the open flume's centre rail. Ordinary movement and
         // network/model updates remain shared; only collision steering is bypassed on the ride.
-        const riding = slideRide.current && slideLayout
+        const riding = slideRide.current
         if (riding) {
-            const ride = slideRide.current!
+            const ride = slideRide.current!, layout = ride.layout
             ride.elapsed += delta
-            const speed = THREE.MathUtils.lerp(8, 15, Math.min(1, ride.elapsed / 2))
-            ride.progress = Math.min(1, ride.progress + speed * delta / slideLayout!.length)
-            const sample = sampleWaterslideRide(slideLayout!, ride.progress)
+            const speed = THREE.MathUtils.lerp(8, layout.rideSpeed ?? 15, Math.min(1, ride.elapsed / 2))
+            ride.progress = Math.min(1, ride.progress + speed * delta / layout.length)
+            const sample = sampleWaterslideRide(layout, ride.progress)
             const blend = THREE.MathUtils.smoothstep(ride.elapsed, 0, 0.35)
             targetPosition.lerpVectors(ride.origin, sample.position, blend)
             velocity.current.copy(targetPosition).sub(position.current).divideScalar(Math.max(delta, 0.001))
@@ -713,7 +719,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
                 velocity.current.multiplyScalar(0.2)
                 velocity.current.y = 0
                 window.dispatchEvent(new CustomEvent('jackalopes:slide-splash', { detail: {
-                    position: [sample.position.x, slideLayout!.waterLevel, sample.position.z],
+                    position: [sample.position.x, layout.waterLevel, sample.position.z],
                 } }))
             }
         }
