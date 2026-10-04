@@ -2,9 +2,10 @@ import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 
 export const CAVE_SAUNA_POSITION = { x: 8.5, z: -187 } as const
-type Box = { at: [number, number, number]; size: [number, number, number]; turn?: number }
+export type SaunaBox = { at: [number, number, number]; size: [number, number, number]; turn?: number }
+type Box = SaunaBox
 
-// Fixed physical surfaces, including the glass door held open beside the entrance.
+// Static cabin surfaces; the interactive door has its own kinematic body.
 export const SAUNA_SOLIDS: readonly Box[] = [
   { at: [0, 0.045, 0], size: [4.9, 0.09, 4.8] },
   { at: [0, 1.7, -2.31], size: [4.8, 3.22, 0.18] },
@@ -14,13 +15,40 @@ export const SAUNA_SOLIDS: readonly Box[] = [
   { at: [-1.66, 1.7, 2.31], size: [1.32, 3.22, 0.18] },
   { at: [1.66, 1.7, 2.31], size: [1.32, 3.22, 0.18] },
   { at: [0, 3.04, 2.31], size: [2, 0.54, 0.18] },
-  { at: [-1, 1.43, 3.25], size: [1.88, 2.68, 0.07], turn: -Math.PI / 2 },
   { at: [0, 0.94, -1.54], size: [3.94, 0.16, 0.82] },
   { at: [0, 0.44, -0.81], size: [3.94, 0.14, 0.53] },
   { at: [-1.76, 0.44, 0.25], size: [0.62, 0.14, 1.6] },
   { at: [1.4, 0.57, 0.66], size: [0.79, 0.96, 0.79] },
   { at: [1.4, 1.17, 0.66], size: [0.68, 0.26, 0.68] },
 ]
+
+export const SAUNA_DOOR_HINGE = { x: -1, z: 2.31 } as const
+export const SAUNA_DOOR_SIZE = [1.88, 2.68, .07] as const
+export function saunaDoorPose(angle: number): SaunaBox {
+  return { at: [SAUNA_DOOR_HINGE.x + Math.cos(angle) * .94, 1.43,
+    SAUNA_DOOR_HINGE.z - Math.sin(angle) * .94], size: [...SAUNA_DOOR_SIZE], turn: angle }
+}
+
+type Position = { x: number; y: number; z: number }
+export function canUseSaunaDoor(floor: number, player: Position): boolean {
+  if (![floor, player.x, player.y, player.z].every(Number.isFinite)) return false
+  const x = player.x - CAVE_SAUNA_POSITION.x, z = player.z - CAVE_SAUNA_POSITION.z
+  if (player.y < floor + .4 || player.y > floor + 3.5) return false
+  const inside = Math.abs(x) < 2.2 && Math.abs(z) < 2.2
+  return inside || Math.hypot(x, z - SAUNA_DOOR_HINGE.z) < 3.2
+}
+
+export function isInSaunaDoorSweep(floor: number, player: Position): boolean {
+  if (![floor, player.x, player.y, player.z].every(Number.isFinite) || player.y < floor + .4 || player.y > floor + 4) return false
+  const x = player.x - CAVE_SAUNA_POSITION.x - SAUNA_DOOR_HINGE.x
+  const z = player.z - CAVE_SAUNA_POSITION.z - SAUNA_DOOR_HINGE.z
+  return x > -.55 && z > -.55 && Math.hypot(Math.max(0, x), Math.max(0, z)) < 2.43
+}
+
+export function isInsideSauna(floor: number, point: Position): boolean {
+  return Number.isFinite(floor) && Math.abs(point.x - CAVE_SAUNA_POSITION.x) < 2.2 &&
+    Math.abs(point.z - CAVE_SAUNA_POSITION.z) < 2.2 && point.y > floor + .08 && point.y < floor + 3.29
+}
 
 function batchBoxes(boxes: Box[], color: string) {
   const base = new THREE.Color(color)

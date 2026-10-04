@@ -2,6 +2,7 @@ import Rapier from '@dimforge/rapier3d-compat'
 import { KeyboardControls, PerspectiveCamera, PointerLockControls, useKeyboardControls, useGLTF, useAnimations } from '@react-three/drei'
 import { useFrame, useThree } from '@react-three/fiber'
 import { CapsuleCollider, RigidBody, RigidBodyProps, useBeforePhysicsStep, useRapier } from '@react-three/rapier'
+import { CHARACTER_CAPSULE } from './character-physics'
 import { useEffect, useRef, useState, useMemo, forwardRef, useImperativeHandle } from 'react'
 
 declare global {
@@ -436,16 +437,14 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
         }
 
         // compute collider movement and update rigid body
-        characterController.current.computeColliderMovement(characterCollider, movementDirection)
+        characterController.current.computeColliderMovement(characterCollider, movementDirection, rapier.rapier.QueryFilterFlags.EXCLUDE_SENSORS)
 
         const translation = characterRigidBody.translation()
         const newPosition = _characterTranslation.copy(translation as THREE.Vector3)
         const movement = characterController.current.computedMovement()
         newPosition.add(movement)
 
-        // No direct player-vs-player push here.
-        // Player colliders are sensors, so hard blocking is gone.
-        // Keeping this disabled avoids the invisible force-field feel around the merc.
+        // Remote movement capsules provide close contact; combat sensors never push players.
 
         // If we need to reconcile with server position
         if (pendingReconciliation.current) {
@@ -937,7 +936,7 @@ export const Player = forwardRef<EntityType, PlayerProps>(({ onMove, walkSpeed =
                         enabledRotations={[false, false, false]}
                     >
                         <object3D name="player" />
-                        <CapsuleCollider args={[0.85, 0.35]} sensor />
+                        <CapsuleCollider args={[CHARACTER_CAPSULE.halfHeight, CHARACTER_CAPSULE.radius]} sensor />
                     </RigidBody>
                 </Component>
             </Entity>

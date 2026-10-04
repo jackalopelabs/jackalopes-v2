@@ -7,6 +7,7 @@ import { MercModelPath, JackalopeModelPath } from '../assets'; // Import model p
 import { RemotePlayerAudio } from '../components/RemotePlayerAudio'; // Import RemotePlayerAudio component
 import { log, DEBUG_LEVELS, isDebugEnabled } from '../utils/debugUtils'; // Import new debug utilities
 import { RigidBody, CapsuleCollider, BallCollider, CuboidCollider } from '@react-three/rapier'; // Import Rapier physics components
+import { CHARACTER_CAPSULE } from './character-physics';
 import { MercModel } from './MercModel';
 import { JackalopeModel } from './JackalopeModel';
 import entityStateObserver from '../network/EntityStateObserver'; // Import entityStateObserver
@@ -836,7 +837,8 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
           ccd={true}
           collisionGroups={0xFFFFFFFF}
         >
-          {/* Keep merc hit volumes tight so jackalopes can actually close distance. */}
+          <CapsuleCollider args={[CHARACTER_CAPSULE.halfHeight, CHARACTER_CAPSULE.radius]} position={[0, 1.6, 0]} />
+          {/* Combat volumes register hits without blocking character movement. */}
           <CapsuleCollider args={[3.9, 1.25]} position={[0, 4.2, 0]} sensor={true} />
           
           {/* Add a smaller torso box for reliable hit registration without the old force field. */}
@@ -1350,18 +1352,18 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
           {/* Only render mesh contents when not hit/respawning */}
           {!isHit && (
             <>
-              {/* Use multiple colliders to ensure good collision detection */}
-              {/* Main body collider - enlarged for better hit detection */}
-              <CapsuleCollider args={[2.4, 2.0]} position={[0, 1.2, 0]} sensor={false} friction={1} restitution={0.1} />
+              <CapsuleCollider args={[CHARACTER_CAPSULE.halfHeight, CHARACTER_CAPSULE.radius]} position={[0, -0.65, 0]} />
+              {/* Combat volumes stay generous without creating an invisible movement barrier. */}
+              <CapsuleCollider args={[2.4, 2.0]} position={[0, 1.2, 0]} sensor />
               
               {/* Add a box collider to ensure hits register */}
-              <CuboidCollider args={[2.0, 2.0, 2.0]} position={[0, 1.2, 0]} sensor={false} friction={1} restitution={0.1} />
+              <CuboidCollider args={[2.0, 2.0, 2.0]} position={[0, 1.2, 0]} sensor />
               
               {/* Add a collider for the head area */}
-              <BallCollider args={[1.4]} position={[0, 3.0, 0]} sensor={false} friction={1} restitution={0.1} />
+              <BallCollider args={[1.4]} position={[0, 3.0, 0]} sensor />
               
               {/* Extra collider to catch projectiles */}
-              <BallCollider args={[2.4]} position={[0, 1.6, 0]} sensor={false} friction={1} restitution={0.1} />
+              <BallCollider args={[2.4]} position={[0, 1.6, 0]} sensor />
               
               {/* Show invulnerability effect when necessary */}
               {isInvulnerable && (

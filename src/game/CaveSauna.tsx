@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import { caveFloorAt } from './adventure-caves'
 import { CAVE_SAUNA_POSITION, SAUNA_SOLIDS, createSaunaGeometries } from './cave-sauna'
 import type { TerrainLevelDocument } from './terrain/level-document'
+import { SaunaDoor } from './SaunaDoor'
 
 function cedarMaterial(grainDirection: 'walls' | 'floor' | 'benches') {
   const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .88 })
@@ -39,7 +40,7 @@ function saunaSign() {
   return texture
 }
 
-/** A warm cedar cabin with a permanently open door and real, walkable interior. */
+/** A warm cedar cabin with a shared interactive door and real, walkable interior. */
 export function CaveSauna({ level }: { level: TerrainLevelDocument }) {
   const floor = caveFloorAt(level, CAVE_SAUNA_POSITION.x, CAVE_SAUNA_POSITION.z)
   const geometry = useMemo(createSaunaGeometries, [])
@@ -66,24 +67,6 @@ export function CaveSauna({ level }: { level: TerrainLevelDocument }) {
         <boxGeometry args={[1.2, 2.03, .04]} />
         <meshStandardMaterial color="#bdcfc0" opacity={.17} transparent roughness={.18} metalness={.1} depthWrite={false} />
       </mesh>)}
-      <group name="sauna-open-glass-door" position={[-1, 0, 2.31]} rotation={[0, -Math.PI / 2, 0]}>
-        <mesh position={[.94, 1.43, 0]} userData={{ caveSolid: true }}>
-          <boxGeometry args={[1.74, 2.54, .035]} />
-          <meshStandardMaterial color="#bfd1c2" opacity={.2} transparent roughness={.18} metalness={.1} depthWrite={false} />
-        </mesh>
-        {[.035, 1.845].map(x => <mesh key={x} position={[x, 1.43, 0]} userData={{ caveSolid: true }}>
-          <boxGeometry args={[.07, 2.68, .07]} />
-          <meshStandardMaterial color="#754a31" roughness={.83} />
-        </mesh>)}
-        {[.125, 2.735].map(y => <mesh key={y} position={[.94, y, 0]} userData={{ caveSolid: true }}>
-          <boxGeometry args={[1.88, .07, .07]} />
-          <meshStandardMaterial color="#754a31" roughness={.83} />
-        </mesh>)}
-        <mesh position={[1.58, 1.38, .1]}>
-          <cylinderGeometry args={[.035, .035, .44, 8]} />
-          <meshStandardMaterial color="#d6a56e" roughness={.75} />
-        </mesh>
-      </group>
       <RoundedBox name="sauna-charcoal-stone-heater" args={[.79, .96, .79]} radius={.06} smoothness={2}
         position={[1.4, .57, .66]} userData={{ caveSolid: true }} castShadow>
         <meshStandardMaterial color="#303735" roughness={.86} metalness={.3} />
@@ -96,6 +79,7 @@ export function CaveSauna({ level }: { level: TerrainLevelDocument }) {
         <meshStandardMaterial color="#f4a65f" emissive="#ed863e" emissiveIntensity={.55} roughness={.8} />
       </mesh>)}
     </RigidBody>
+    <SaunaDoor floor={floor} />
     <mesh name="sauna-sign" position={[0, 3.06, 2.443]}>
       <planeGeometry args={[1.72, .43]} />
       <meshStandardMaterial map={sign} roughness={.9} emissive="#c8a076" emissiveIntensity={.12} />

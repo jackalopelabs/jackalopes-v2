@@ -13,7 +13,7 @@ const compiled = await build({ stdin: { contents: `
   export * from './src/game/adventure-caves';
   export * from './src/game/terrain/level-document';
 `, resolveDir: process.cwd() }, bundle: true, format: 'esm', platform: 'node', write: false })
-const { CAVE_SAUNA_POSITION, SAUNA_SOLIDS, createSaunaGeometries, createHotTubGeometries,
+const { CAVE_SAUNA_POSITION, SAUNA_SOLIDS, SAUNA_DOOR_HINGE, SAUNA_DOOR_SIZE, createSaunaGeometries, createHotTubGeometries,
   CAVE_HOT_TUB_POSITION, createCaveGeometries, caveFloorAt, caveCeilingAt, createTerrainLevel, normalizeTerrainLevel } =
   await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
 const savedBytes = readFileSync(new URL('./fixtures/adventure-valley.json', import.meta.url), 'utf8')
@@ -45,6 +45,11 @@ for (const [name, makeLevel] of [['default terrain', createTerrainLevel],
       RAPIER.ColliderDesc.cuboid(size[0] / 2, size[1] / 2, size[2] / 2)
         .setTranslation(x + at[0], floor + at[1], z + at[2])
         .setRotation({ x: 0, y: Math.sin(turn / 2), z: 0, w: Math.cos(turn / 2) }))
+    const door = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased()
+      .setTranslation(x + SAUNA_DOOR_HINGE.x, floor, z + SAUNA_DOOR_HINGE.z)
+      .setRotation({ x: 0, y: -Math.SQRT1_2, z: 0, w: Math.SQRT1_2 }))
+    world.createCollider(RAPIER.ColliderDesc.cuboid(...SAUNA_DOOR_SIZE.map(n => n / 2))
+      .setTranslation(.94, 1.43, 0), door)
     const tubPosition = { x: CAVE_HOT_TUB_POSITION.x, y: floor, z: CAVE_HOT_TUB_POSITION.z }
     for (const key of ['shell', 'bottom']) addMesh(tub[key], tubPosition)
     for (const points of tub.treadPoints) world.createCollider(RAPIER.ColliderDesc.convexHull(points)
@@ -61,7 +66,8 @@ for (const [name, makeLevel] of [['default terrain', createTerrainLevel],
         const p = body.translation(), dx = targetX - p.x, dz = targetZ - p.z, distance = Math.hypot(dx, dz)
         if (distance < .12) return true
         const step = Math.min(distance, 3 / 60)
-        controller.computeColliderMovement(collider, { x: dx / distance * step, y: -.035, z: dz / distance * step })
+        controller.computeColliderMovement(collider, { x: dx / distance * step, y: -.035, z: dz / distance * step },
+          RAPIER.QueryFilterFlags.EXCLUDE_SENSORS)
         const movement = controller.computedMovement()
         body.setNextKinematicTranslation({ x: p.x + movement.x, y: p.y + movement.y, z: p.z + movement.z })
         world.step()
@@ -76,6 +82,10 @@ for (const [name, makeLevel] of [['default terrain', createTerrainLevel],
     assert.equal(move(x + 4, z + 1.7, 150), false, 'solid side wall blocks passage')
     assert(body.translation().x < x + 2, 'stays inside the cabin wall')
     walk(x, z + 1.7)
+    door.setNextKinematicRotation({ x: 0, y: 0, z: 0, w: 1 }); world.step()
+    assert.equal(move(x, -181, 150), false, 'closed sauna door blocks the character')
+    assert(body.translation().z < z + 2, 'closed door keeps the player inside')
+    door.setNextKinematicRotation({ x: 0, y: -Math.SQRT1_2, z: 0, w: Math.SQRT1_2 }); world.step()
     walk(x, -181)
     walk(5, -181)
     walk(5, -187)

@@ -4,6 +4,7 @@ import Rapier from '@dimforge/rapier3d-compat'
 import { Html, PerspectiveCamera, useKeyboardControls } from '@react-three/drei'
 import { useFrame, useThree } from '@react-three/fiber'
 import { CapsuleCollider, RigidBody, RigidBodyProps, useBeforePhysicsStep, useRapier } from '@react-three/rapier'
+import { CHARACTER_CAPSULE } from './character-physics'
 import { useEffect, useRef, useState, useMemo, forwardRef, useImperativeHandle, useCallback } from 'react'
 import { useSwimming, swimVerticalVelocity } from './terrain/use-swimming'
 import { createWaterslide, canBoardWaterslide, sampleWaterslideRide } from './cave-waterslide'
@@ -729,7 +730,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         }
         
         // Check for valid collision movement
-        if (!riding) characterController.current.computeColliderMovement(collider, movement)
+        if (!riding) characterController.current.computeColliderMovement(collider, movement, rapier.rapier.QueryFilterFlags.EXCLUDE_SENSORS)
         const safeMovement = riding ? movement : characterController.current.computedMovement()
         
         // Apply the safe movement to our position
@@ -737,9 +738,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         position.current.y += safeMovement.y
         position.current.z += safeMovement.z
 
-        // No direct player-vs-player push here.
-        // Player colliders are sensors, so hard blocking is gone.
-        // Keeping this disabled avoids the invisible force-field feel around the merc.
+        // Remote movement capsules provide close contact; combat sensors never push players.
 
         // Let the player genuinely fall off the map. Only recover after they have dropped
         // well below the Great Valley, and return them to a valid spawn rather than keeping
@@ -1016,7 +1015,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
                         name="jackalope-player"
                     >
                         <object3D name="jackalope" />
-                        <CapsuleCollider args={[0.85, 0.35]} position={[0, -0.65, 0]} sensor />
+                        <CapsuleCollider args={[CHARACTER_CAPSULE.halfHeight, CHARACTER_CAPSULE.radius]} position={[0, -0.65, 0]} sensor />
                     </RigidBody>
                 </Component>
             </Entity>
