@@ -1,13 +1,14 @@
 import * as THREE from 'three'
 import { TERRAIN_SEGMENTS, TERRAIN_SIZE, type TerrainLevelDocument } from './terrain/level-document'
 import { MIN_SWIM_DEPTH, terrainHeightAt } from './terrain/water-physics'
+import { subtractRabbitHole } from './rabbit-hole-opening'
 
 export const CAVE_MOUTH = { halfWidth: 5, frontZ: 6, backZ: -6 } as const
 export const CAVE_PATCH_HALF = TERRAIN_SIZE / TERRAIN_SEGMENTS
 export const CAVE_RAMP_END_Z = -26
 export const CAVE_ROOM_HEIGHT = 8
-export const CAVE_BOUNDS = { minX: -52, maxX: 52, minZ: -192, maxZ: 6 } as const
-export const CAVE_DEPTH_BREAKS = [-192, -170, -140, -110, -75, -26] as const
+export const CAVE_BOUNDS = { minX: -52, maxX: 52, minZ: -196, maxZ: 6 } as const
+export const CAVE_DEPTH_BREAKS = [-196, -170, -140, -110, -75, -26] as const
 
 type Point = readonly [number, number]
 type Vertex = readonly [number, number, number]
@@ -20,7 +21,8 @@ export const CAVE_BODY_OUTLINE: readonly Point[] = [
   [-18, -59], [-20, -66], [-12, -73], [-10, -82], [-13, -94],
   [-30, -98], [-46, -105], [-52, -117], [-49, -132], [-37, -143],
   [-20, -149], [-10, -158], [-12, -171], [-26, -176], [-28, -184],
-  [-18, -192], [4, -192], [22, -187], [25, -177], [12, -169],
+  [-18, -192], [-2.55, -192], [-2.55, -195.55], [2.55, -195.55], [2.55, -192],
+  [4, -192], [22, -187], [25, -177], [12, -169],
   [10, -156], [22, -150], [39, -143], [50, -132], [52, -117],
   [43, -104], [26, -98], [12, -92], [10, -82], [11, -71],
   [15, -62], [9, -55], [11, -49], [18, -46], [23, -44],
@@ -224,9 +226,14 @@ export function createCaveGeometries(level: TerrainLevelDocument) {
       for (let i = 1; i < poly.length - 1; i++) {
         const pts = [poly[0], poly[i], poly[i + 1]]
         const f = pts.map(([x, z]): Vertex => [x, bodyFloor(z), z])
-        const r = pts.map(([x, z]): Vertex => [x, bodyRoof(z), z])
         triangle(floor, f[0], f[1], f[2], 1)
-        triangle(ceiling, r[0], r[1], r[2], -1)
+      }
+      // The stone escape staircase passes through a real opening in the cave roof.
+      for (const piece of subtractRabbitHole(poly, p => p)) {
+        for (let i = 1; i < piece.length - 1; i++) {
+          const r = [piece[0], piece[i], piece[i + 1]].map(([x, z]): Vertex => [x, bodyRoof(z), z])
+          triangle(ceiling, r[0], r[1], r[2], -1)
+        }
       }
       // Clip this already-linear floor polygon against the water elevation.
       // This exactly follows both shores without a rectangular water spill.

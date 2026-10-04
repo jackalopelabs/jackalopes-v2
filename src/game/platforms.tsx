@@ -15,6 +15,7 @@ import {
 } from './terrain/level-document'
 import { AdventureCaves } from './AdventureCaves'
 import { cutCaveMouth } from './adventure-caves'
+import { cutRabbitHole } from './rabbit-hole-opening'
 import { WaterSurface } from './terrain/WaterSurface'
 
 type BoxDimensions = [width: number, height: number, depth: number]
@@ -246,7 +247,7 @@ export function Platforms({ holographicVision = false, adventureStyle = false }:
             positions[i + 2] = sampleBaseTerrainHeight(x, worldZ) + level.heightOffsets[vertexIndex];
         }
 
-        if (adventureStyle) cutCaveMouth(geometry);
+        if (adventureStyle) { cutCaveMouth(geometry); cutRabbitHole(geometry); }
         geometry.computeVertexNormals();
         return geometry;
     }, [outsideFloorSize, terrainSegments, terrainNoiseScale, mapSize, forestPerimeter, digitalDesertStart, desertRimStart, rimPeak, rimHeight, valleyBottom, valleyDepth, adventureStyle]);

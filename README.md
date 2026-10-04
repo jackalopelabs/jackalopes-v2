@@ -33,11 +33,13 @@ Daddy's bed sits in the opposite back-right corner, with a dark walnut frame, na
 
 An oval natural-rock hot tub sits along the back wall between the bedroom corners, with mineral-stained stone, rippling turquoise water, gentle steam, submerged seats, and stepping stones into and out of the shallow basin. The rim, steps, seats, and basin floor are solid; the water is shallow enough to stand in. Reduced-motion preferences pause the ripples and steam, and the ordinary lake route stays open.
 
+Behind the hot tub, a steep winding staircase of matching mineral stones climbs through a narrow chimney to a small stone-lined rabbit hole on the surface. Jump between the flat treads with **Space / A (Cross) / touch Jump**; warm markers show the route. The top landing meets the high side of the sculpted terrain, and the same stones lead back down to the bedroom. The camera stays inside the chimney while climbing. Both the cave roof and surface terrain have real openings; the saved editor map remains unchanged.
+
 A cedar sauna sits to the right of the hot tub. Walk through its glass door to tiered benches, warm amber lighting, a stone heater, and a wooden bucket and ladle. Press **F / controller X (Square) / touch Use** from inside or near the door to close or reopen it. The closed sauna fills with dense fog and its glass steams up; reopening clears it. Door state is shared with other players, including newcomers. The swing waits while a character occupies the doorway. Fog is confined to the sauna, and there is room to pass between it, the hot tub, and Daddy's bed.
 
 Characters use matching compact movement capsules so friends can stand close together. Larger combat hit volumes remain sensors for hit registration; movement queries ignore them while keeping collisions with character bodies, scenery, floors, and doors.
 
-Hunt retains its original central scoring circle. Cave geometry is a runtime Adventure overlay: it opens only the central four terrain cells, restores their surface around the entrance, and leaves the shared editor document unchanged. Existing surface swimming and pickups remain in place. Underground water is a bounded Adventure-only volume, separate from the terrain editor water level. The same keyboard, gamepad, and contextual touch swimming controls work in the lake.
+Hunt retains its original central scoring circle. Cave geometry is a runtime Adventure overlay: it opens the central four terrain cells, restores their surface around the entrance, and precisely cuts the small rear escape hole while preserving the surrounding terrain slopes. It leaves the shared editor document unchanged. Existing surface swimming and pickups remain in place. Underground water is a bounded Adventure-only volume, separate from the terrain editor water level. The same keyboard, gamepad, and contextual touch swimming controls work in the lake.
 
 ## Features
 

@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 
 export const CAVE_HOT_TUB_POSITION = { x: 0, z: -187 } as const
 export const HOT_TUB_WATER_HEIGHT = 1.02
+export const MINERAL_STONE_COLORS = { rock: '#837a68', pale: '#c6bea0', mineral: '#6c9182' } as const
 
 const SEGMENTS = 40
 const outline = (angle: number) => 1 + Math.sin(angle * 3 + 0.6) * 0.045 + Math.cos(angle * 7) * 0.025
@@ -23,7 +24,8 @@ export function createHotTubGeometries() {
         Math.sin(angle) * rz * outline(angle))
     }))
   const positions: number[] = [], colors: number[] = []
-  const rock = new THREE.Color('#837a68'), pale = new THREE.Color('#c6bea0'), mineral = new THREE.Color('#6c9182')
+  const rock = new THREE.Color(MINERAL_STONE_COLORS.rock), pale = new THREE.Color(MINERAL_STONE_COLORS.pale),
+    mineral = new THREE.Color(MINERAL_STONE_COLORS.mineral)
   for (let band = 0; band < profile.length - 1; band++) {
     for (let i = 0; i < SEGMENTS; i++) {
       const next = (i + 1) % SEGMENTS

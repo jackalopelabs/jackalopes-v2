@@ -19,6 +19,7 @@ import { Platforms } from './game/platforms'
 import { FoliageGrove } from './game/FoliageGrove';
 import { waterslideState } from './game/waterslide-state';
 import { caveLayout, isWithinCaveFootprint } from './game/adventure-caves';
+import { isInRabbitHoleShaft } from './game/cave-rabbit-hole';
 import { loadTerrainLevel } from './game/terrain/level-document';
 import { GROVE_STORAGE_KEY } from './game/foliage-grove';
 import { AdventureAtmosphere } from './game/AdventureAtmosphere';
@@ -774,7 +775,8 @@ const ThirdPersonCameraControls = ({
 }) => {
     // For tracking target position and rotation
     const targetRef = useRef(new THREE.Vector3());
-    const cave = useMemo(() => caveLayout(loadTerrainLevel()), []);
+    const caveLevel = useMemo(() => loadTerrainLevel(), []);
+    const cave = useMemo(() => caveLayout(caveLevel), [caveLevel]);
     const caveRoot = useRef<THREE.Object3D | null>(null);
     const caveSolids = useRef<THREE.Object3D[]>([]);
     const cameraRay = useMemo(() => new THREE.Raycaster(), []);
@@ -972,8 +974,8 @@ const ThirdPersonCameraControls = ({
 
                 targetRef.current.lerp(player, targetSmoothing);
 
-                const underground = adventureCaves && player.y < cave.entranceY + 0.5 &&
-                    isWithinCaveFootprint(player.x, player.z);
+                const underground = adventureCaves && ((player.y < cave.entranceY + 0.5 &&
+                    isWithinCaveFootprint(player.x, player.z)) || isInRabbitHoleShaft(caveLevel, player));
                 const followDistance = shoulderView ? (underground ? 4 : 6) : underground ? Math.min(distance, 5) : distance;
                 const followHeight = shoulderView ? 1 : underground ? Math.min(height, 1.8) : height;
                 // A closer underground camera fits tunnels; shell raycasts keep it inside rock.
