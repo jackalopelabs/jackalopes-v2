@@ -1,5 +1,6 @@
+import { useCaveFogLayer } from './CaveAtmosphere'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useFrame, useThree } from '@react-three/fiber'
+import { useFrame } from '@react-three/fiber'
 import { Html } from '@react-three/drei'
 import { CuboidCollider, RigidBody, useBeforePhysicsStep, type RapierRigidBody } from '@react-three/rapier'
 import * as THREE from 'three'
@@ -24,7 +25,7 @@ const fogFragment = `
 
 /** Shared, reversible door action. Thick fog stays inside the sauna and clears when opened. */
 export function SaunaDoor({ floor }: { floor: number }) {
-  const { scene } = useThree()
+  const fogLayer = useCaveFogLayer(100)
   const body = useRef<RapierRigidBody>(null)
   const angle = useRef(OPEN_ANGLE)
   const door = useRef<SaunaDoorState>({ ...INITIAL_SAUNA_DOOR })
@@ -35,7 +36,6 @@ export function SaunaDoor({ floor }: { floor: number }) {
   const humidity = useRef(0)
   const uniforms = useMemo(() => ({ humidity: { value: 0 } }), [])
   const saunaFog = useMemo(() => new THREE.FogExp2('#c7c9b5', 0), [])
-  const ordinaryFog = useRef<THREE.Fog | THREE.FogExp2 | null>(scene.fog)
   // The development game also runs over plain HTTP, where randomUUID is unavailable.
   const offlineId = useMemo(() => `offline-${Date.now()}-${Math.random().toString(36).slice(2)}`, [])
 
@@ -85,7 +85,6 @@ export function SaunaDoor({ floor }: { floor: number }) {
     update(); preference.addEventListener('change', update)
     return () => preference.removeEventListener('change', update)
   }, [])
-  useEffect(() => () => { if (scene.fog === saunaFog) scene.fog = ordinaryFog.current }, [scene, saunaFog])
 
   const doorwayOccupied = () => {
     const local = window.__localPlayerPosition
@@ -121,12 +120,9 @@ export function SaunaDoor({ floor }: { floor: number }) {
     if (text !== hintRef.current) { hintRef.current = text; setHint(text) }
     humidity.current = stepSaunaFog(humidity.current, door.current.closed && Math.abs(angle.current) < .04, delta)
     uniforms.humidity.value = humidity.current
-    if (scene.fog !== saunaFog) ordinaryFog.current = scene.fog
-    if (humidity.current > .01 && isInsideSauna(floor, camera.position)) {
-      saunaFog.density = humidity.current * .7
-      scene.fog = saunaFog
-    } else if (scene.fog === saunaFog) scene.fog = ordinaryFog.current
-  })
+    saunaFog.density = humidity.current * .7
+    fogLayer.fog = humidity.current > .01 && isInsideSauna(floor, camera.position) ? saunaFog : null
+  }, -2)
 
   return <>
     <RigidBody ref={body} name="sauna-interactive-door" type="kinematicPosition" colliders={false}

@@ -1,3 +1,4 @@
+import { CaveFixtureLight } from './CaveAtmosphere'
 import { CavePartyRoom } from './CavePartyRoom'
 import { useEffect, useMemo } from 'react'
 import { useFrame } from '@react-three/fiber'
@@ -289,11 +290,11 @@ export function AdventureCaves({ surfaceMaterial, quality = 'low' }: { surfaceMa
       <mesh geometry={decoration.routeMarks}>
         <meshBasicMaterial color="#ae9362" toneMapped={false} />
       </mesh>
-      <pointLight position={[0, cave.floorY + 5, -35]} color="#93d5d3" intensity={32} distance={34} decay={1.5} />
-      <pointLight position={[-35, cave.floorY + 4, -38]} color="#b6a0de" intensity={24} distance={27} decay={1.5} />
-      <pointLight position={[28, cave.floorY + 4, -42]} color="#76cdd7" intensity={22} distance={30} decay={1.5} />
-      <pointLight position={[0, cave.waterLevel + 3, -124]} color="#73c2c3" intensity={44} distance={52} decay={1.5} />
-      <pointLight position={[0, (caveFloorAt(level, 0, -178) ?? cave.floorY) + 6, -178]} color="#c4b1dd" intensity={32} distance={34} decay={1.5} />
+      <CaveFixtureLight position={[0, cave.floorY + 5, -35]} color="#93d5d3" intensity={32} distance={34} decay={1.5} />
+      <CaveFixtureLight position={[-35, cave.floorY + 4, -38]} color="#b6a0de" intensity={24} distance={27} decay={1.5} />
+      <CaveFixtureLight position={[28, cave.floorY + 4, -42]} color="#76cdd7" intensity={22} distance={30} decay={1.5} />
+      <CaveFixtureLight position={[0, cave.waterLevel + 3, -124]} color="#73c2c3" intensity={44} distance={52} decay={1.5} />
+      <CaveFixtureLight position={[0, (caveFloorAt(level, 0, -178) ?? cave.floorY) + 6, -178]} color="#c4b1dd" intensity={32} distance={34} decay={1.5} />
     </group>
   </group>
 }

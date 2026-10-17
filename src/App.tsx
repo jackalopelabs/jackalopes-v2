@@ -1,3 +1,4 @@
+import { CaveAtmosphereProvider, CaveAmbientLight, CaveDirectionalLight } from './game/CaveAtmosphere'
 import { adventureCombatState } from './game/adventure-combat-state'
 import { AdventureCombat } from './game/AdventureCombat'
 import { Canvas, compatibilityMode } from './common/components/canvas'
@@ -4591,6 +4592,7 @@ export function App() {
             {/* {showModelTester && <ModelTester />} */}
 
             <Canvas shadows={adventureMode && graphicsQuality !== 'low'} dpr={graphicsQuality === 'low' ? 1 : [1, 1.5]} gl={{ antialias: graphicsQuality !== 'low', powerPreference: 'default' }}>
+                <CaveAtmosphereProvider enabled={adventureMode} nightVision={jackalopeNightVisionActive}>
                 {fogEnabled && <fog attach="fog" args={[dynamicFogColor, dynamicFogNear, dynamicFogFar]} />}
                 {!compatibilityMode && <Environment
                     preset={adventureMode ? 'night' : dynamicEnvironmentPreset}
@@ -4614,11 +4616,11 @@ export function App() {
                 {/* Add Stats Collector - must be inside Canvas */}
                 <StatsCollector />
 
-                <ambientLight intensity={dynamicAmbientIntensity} />
-                <directionalLight
+                <CaveAmbientLight intensity={dynamicAmbientIntensity} />
+                <CaveDirectionalLight
                     castShadow
                     position={[-directionalDistance, directionalHeight, -directionalDistance]}
-                    ref={directionalLightRef}
+                    lightRef={directionalLightRef}
                     intensity={dynamicDirectionalIntensity}
                     shadow-mapSize={[globalQualityParams.shadowMapSize, globalQualityParams.shadowMapSize]}
                     shadow-camera-left={adventureMode ? -60 : -80}
@@ -4928,6 +4930,7 @@ export function App() {
                 {/* Add the SoundProcessor component inside Canvas */}
                 <SoundProcessor />
                 <ModelPreloader />
+                </CaveAtmosphereProvider>
             </Canvas>
 
             {/* Old crosshair replaced by GameCrosshair in HUD section above */}

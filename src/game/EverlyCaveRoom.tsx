@@ -1,3 +1,4 @@
+import { CaveFixtureLight } from './CaveAtmosphere'
 import { useMemo } from 'react'
 import { RoundedBox } from '@react-three/drei'
 import { CuboidCollider, RigidBody } from '@react-three/rapier'
@@ -129,7 +130,7 @@ export function EverlyCaveRoom({ level }: { level: TerrainLevelDocument }) {
           roughness={0.95} side={THREE.DoubleSide} />
       </mesh>
     </RigidBody>
-    <pointLight position={[1.76, 1.28, -1.06]} color="#ffd5af" intensity={9} distance={10} decay={1.5} />
-    <pointLight position={[0, 2.8, 0.2]} color="#ffe6dc" intensity={13} distance={9} decay={1.5} />
+    <CaveFixtureLight position={[1.76, 1.28, -1.06]} color="#ffd5af" intensity={9} distance={10} decay={1.5} />
+    <CaveFixtureLight position={[0, 2.8, 0.2]} color="#ffe6dc" intensity={13} distance={9} decay={1.5} />
   </group>
 }

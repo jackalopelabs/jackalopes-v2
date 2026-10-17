@@ -1,3 +1,4 @@
+import { CaveFixtureLight } from './CaveAtmosphere'
 import { RoundedBox } from '@react-three/drei'
 import { CuboidCollider, RigidBody } from '@react-three/rapier'
 import { caveFloorAt } from './adventure-caves'
@@ -110,7 +111,7 @@ export function DaddyCaveRoom({ level }: { level: TerrainLevelDocument }) {
         <meshStandardMaterial color="#f5d4a1" emissive="#ffd59b" emissiveIntensity={0.65} />
       </mesh>
     </RigidBody>
-    <pointLight position={[-2.05, 1.22, -1.22]} color="#ffd5af" intensity={9} distance={10} decay={1.5} />
-    <pointLight position={[0, 2.8, 0.2]} color="#ddeee5" intensity={13} distance={9} decay={1.5} />
+    <CaveFixtureLight position={[-2.05, 1.22, -1.22]} color="#ffd5af" intensity={9} distance={10} decay={1.5} />
+    <CaveFixtureLight position={[0, 2.8, 0.2]} color="#ddeee5" intensity={13} distance={9} decay={1.5} />
   </group>
 }

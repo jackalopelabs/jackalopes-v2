@@ -1,3 +1,4 @@
+import { CaveFixtureLight } from './CaveAtmosphere'
 import { useEffect, useMemo } from 'react'
 import { CylinderCollider, RigidBody } from '@react-three/rapier'
 import * as THREE from 'three'
@@ -39,7 +40,7 @@ export function CaveRabbitHole({ level }: { level: TerrainLevelDocument }) {
     <mesh name="rabbit-hole-slide-guide-lights" geometry={geometry.guides} dispose={null} raycast={() => {}}>
       <meshBasicMaterial color="#ffda92" toneMapped={false} />
     </mesh>
-    <pointLight position={[x, floor + 6, z]} color="#ffe0b1" intensity={18} distance={10} decay={1.5} />
-    <pointLight position={[x, floor + 14, z]} color="#dedcc3" intensity={16} distance={10} decay={1.5} />
+    <CaveFixtureLight position={[x, floor + 6, z]} color="#ffe0b1" intensity={18} distance={10} decay={1.5} />
+    <CaveFixtureLight position={[x, floor + 14, z]} color="#dedcc3" intensity={16} distance={10} decay={1.5} />
   </group>
 }

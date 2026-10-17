@@ -1,3 +1,4 @@
+import { CaveHemisphereLight, CaveDirectionalLight } from './CaveAtmosphere'
 import { useEffect, useMemo, useRef, type RefObject } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
@@ -43,8 +44,8 @@ export function AdventureLighting({ lightRef, nightVision = false }: {
   })
 
   return <group userData={{ holographicSkip: true }}>
-    <hemisphereLight args={['#a0c9d0', '#292838', nightVision ? 0.14 : 0.7]} />
-    <directionalLight position={[130, 85, 60]} color="#79cbd6" intensity={nightVision ? 0.1 : 0.65} />
+    <CaveHemisphereLight color="#a0c9d0" groundColor="#292838" intensity={nightVision ? .14 : .7} />
+    <CaveDirectionalLight position={[130, 85, 60]} color="#79cbd6" intensity={nightVision ? 0.1 : 0.65} />
     <mesh ref={contact} rotation={[-Math.PI / 2, 0, 0]} renderOrder={2} raycast={() => {}}>
       <planeGeometry args={[3.6, 3.6]} />
       <shaderMaterial ref={contactMaterial} uniforms={uniforms} transparent depthWrite={false}

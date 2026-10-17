@@ -1,5 +1,9 @@
 import * as THREE from 'three'
 
+export const CAVE_STEAM_SOFTNESS = `vec2 p = (vUv - 0.5) * 2.0;
+              p.x += sin(p.y * 5.0) * 0.1;
+              float softness = exp(-dot(p, p) * 4.5) * (1.0 - smoothstep(0.6, 1.0, length(p)));`
+
 /** A single inexpensive draw of soft steam wisps, with no textures or particle objects. */
 export function createCaveSteamGeometry(count = 9, centers?: readonly (readonly [number, number])[]) {
   const positions: number[] = [], seeds: number[] = [], origins: number[] = [], uv: number[] = []
@@ -51,9 +55,7 @@ export function createCaveSteamMaterial(height: number) {
             varying vec2 vUv;
             varying float vFade;
             void main() {
-              vec2 p = (vUv - 0.5) * 2.0;
-              p.x += sin(p.y * 5.0) * 0.1;
-              float softness = exp(-dot(p, p) * 4.5) * (1.0 - smoothstep(0.6, 1.0, length(p)));
+              ${CAVE_STEAM_SOFTNESS}
               gl_FragColor = vec4(tint, softness * vFade * amount);
               #include <tonemapping_fragment>
               #include <colorspace_fragment>

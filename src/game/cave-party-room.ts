@@ -4,8 +4,8 @@ import { CAVE_BODY_OUTLINE, caveFloorAt, caveCeilingAt, isWithinCaveFootprint } 
 import type { TerrainLevelDocument } from './terrain/level-document'
 import { CAVE_SAUNA_POSITION } from './cave-sauna'
 
-const LOW_PARTY_BUDGET = { beams: 4, balloons: 3, stars: 44, haze: 6, lights: 1 } as const
-const FULL_PARTY_BUDGET = { beams: 12, balloons: 5, stars: 132, haze: 18, lights: 3 } as const
+const LOW_PARTY_BUDGET = { beams: 4, balloons: 3, stars: 44, lights: 1 } as const
+const FULL_PARTY_BUDGET = { beams: 12, balloons: 5, stars: 132, lights: 3 } as const
 export const partyQualityBudget = (quality: string) => quality === 'low' ? LOW_PARTY_BUDGET : FULL_PARTY_BUDGET
 export const PARTY_FRONT_Z = -172
 // Inset from the back-left diagonal rock wall, facing the hot tub/bedroom aisle.

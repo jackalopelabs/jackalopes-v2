@@ -1,3 +1,4 @@
+import { CaveFixtureLight } from './CaveAtmosphere'
 import { createCaveSteamGeometry, createCaveSteamMaterial } from './cave-steam'
 import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
@@ -105,6 +106,6 @@ export function CaveHotTub({ level }: { level: TerrainLevelDocument }) {
         <primitive object={steamMaterial} attach="material" />
       </mesh>
     </group>
-    <pointLight position={[-1.2, 2.8, -1.6]} color="#ffddb0" intensity={18} distance={11} decay={1.5} />
+    <CaveFixtureLight position={[-1.2, 2.8, -1.6]} color="#ffddb0" intensity={18} distance={11} decay={1.5} />
   </group>
 }

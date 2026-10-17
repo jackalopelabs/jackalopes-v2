@@ -10,7 +10,9 @@ import { PARTY_BALLOONS, PARTY_SWITCH, PARTY_FRONT_Z, canUsePartySwitch,
   createPartyAccentGeometry, createPartyProjectionGeometry, partyBeamFraction, partyQualityBudget } from './cave-party-room'
 import { createGalaxyMaterial, createPartyRGBMaterial, createPartyStarGeometry,
   createPartyStarMaterial, createPartyBalloonMaterial } from './cave-party-materials'
-import { createCaveSteamGeometry, createCaveSteamMaterial } from './cave-steam'
+import { useCaveAtmosphere } from './CaveAtmosphere'
+import { HotTubPartySteam } from './HotTubPartySteam'
+import { createPartyBeamGlow } from './party-beam-glow'
 
 type PartyPeer = ReturnType<typeof createCavePartyPeer>
 type PartyNetwork = {
@@ -44,8 +46,9 @@ function switchSign(on: boolean) {
   return texture
 }
 
-/** Shared wall switch only adds its own visuals/lights. It never mutates scene lighting or fog. */
+/** Shared wall switch drives the scoped atmosphere without changing its peer protocol. */
 export function CavePartyRoom({ level, shell, quality, reducedMotion: overrideMotion, network, controllerRef }: Props) {
+  const atmosphere = useCaveAtmosphere()
   const floor = caveFloorAt(level, PARTY_SWITCH.x, PARTY_SWITCH.z)
   const manager = useRef<PartyNetwork | undefined>()
   const [on, setOn] = useState(false), [near, setNear] = useState(false)
@@ -56,6 +59,10 @@ export function CavePartyRoom({ level, shell, quality, reducedMotion: overrideMo
   const peer = useMemo(() => createCavePartyPeer(`party-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     event => manager.current?.sendMessage({ type: 'game_event', event }),
     () => manager.current?.getPlayerId(), state => setOn(state.on)), [])
+  useEffect(() => {
+    if (atmosphere) { atmosphere.on = on; atmosphere.low = quality === 'low'; atmosphere.reducedMotion = overrideMotion ?? osReduced }
+  }, [atmosphere, on, quality, overrideMotion, osReduced])
+  useEffect(() => () => { if (atmosphere) { atmosphere.on = false; atmosphere.blend = 0; atmosphere.age = atmosphere.time = 0; atmosphere.clearPartyFog() } }, [atmosphere])
   const sign = useMemo(() => switchSign(on), [on])
   useEffect(() => () => sign.dispose(), [sign])
   useEffect(() => {
@@ -113,6 +120,7 @@ export function CavePartyRoom({ level, shell, quality, reducedMotion: overrideMo
   if (floor === null) return null
   return <group name="cave-party-room" userData={{ holographicSkip: true, excludeHolographicVision: true }}>
     <PartyVisuals {...{ level, shell, quality, on }} reducedMotion={overrideMotion ?? osReduced} />
+    <HotTubPartySteam level={level} quality={quality} />
     <group name="cave-party-wall-switch" position={[PARTY_SWITCH.x, floor, PARTY_SWITCH.z]} rotation={[0, PARTY_SWITCH.yaw, 0]}>
       <mesh position={[0, 1.74, 0]}><boxGeometry args={[1.45, 1.45, .09]} /><meshStandardMaterial color="#263044" roughness={.6} metalness={.35} /></mesh>
       <mesh name="party-sleep-label" position={[0, 2.04, .051]}>
@@ -140,16 +148,16 @@ export function CavePartyRoom({ level, shell, quality, reducedMotion: overrideMo
 function PartyVisuals({ level, shell, quality, on, reducedMotion }: Pick<Props, 'level' | 'shell' | 'quality'> & { on: boolean; reducedMotion: boolean }) {
   const floor = caveFloorAt(level, 0, -187)!
   const root = useRef<THREE.Group>(null), beams = useRef<THREE.InstancedMesh>(null), balloons = useRef<THREE.InstancedMesh>(null)
+  const glow = useRef<THREE.InstancedMesh>(null)
   const lights = useRef<(THREE.PointLight | null)[]>([])
   const blend = useRef(0), phase = useRef(0)
   const walls = shell[0], ceiling = shell[1]
   const geometry = useMemo(() => ({
     projection: createPartyProjectionGeometry([walls, ceiling]), accent: createPartyAccentGeometry(level),
     stars: createPartyStarGeometry(level),
-    haze: createCaveSteamGeometry(18, [[-16, -185], [-14, -184], [-10, -182], [-3, -180], [0, -181], [15, -179], [17, -181], [18, -183], [-20, -184]]),
   }), [walls, ceiling, level])
   const materials = useMemo(() => ({ galaxy: createGalaxyMaterial(), rgb: createPartyRGBMaterial(),
-    stars: createPartyStarMaterial(), balloon: createPartyBalloonMaterial(), steam: createCaveSteamMaterial(.35),
+    stars: createPartyStarMaterial(), balloon: createPartyBalloonMaterial(), glow: createPartyBeamGlow(),
   }), [])
   const work = useMemo(() => ({ dummy: new THREE.Object3D(), from: new THREE.Vector3(), to: new THREE.Vector3(),
     direction: new THREE.Vector3(), up: new THREE.Vector3(0, 1, 0), color: new THREE.Color() }), [])
@@ -159,7 +167,6 @@ function PartyVisuals({ level, shell, quality, on, reducedMotion }: Pick<Props, 
   useEffect(() => () => { Object.values(materials).forEach(material => material.dispose()) }, [materials])
   const animatedMaterials = useMemo(() => [materials.galaxy, materials.rgb, materials.stars, materials.balloon], [materials])
   const budget = partyQualityBudget(quality)
-  const low = quality === 'low'
   useFrame(({ camera, gl }, delta) => {
     blend.current = stepPartyBlend(blend.current, on, delta)
     if (!reducedMotion && on) phase.current += Math.min(delta, .1)
@@ -176,14 +183,11 @@ function PartyVisuals({ level, shell, quality, on, reducedMotion }: Pick<Props, 
     }
     materials.stars.uniforms.pixelRatio.value = Math.min(gl.getPixelRatio(), 2)
     geometry.stars.setDrawRange(0, Math.min(budget.stars, geometry.stars.attributes.position.count))
-    geometry.haze.setDrawRange(0, budget.haze * 6)
-    materials.steam.uniforms.time.value = time
-    materials.steam.uniforms.amount.value = amount * (low ? .65 : 1.1)
-    materials.steam.uniforms.rise.value = 2.4
-    materials.steam.uniforms.tint.value.setRGB(.48, .59, .88)
     if (beams.current) {
       const count = budget.beams
       beams.current.count = count
+      if (glow.current) glow.current.count = count
+      materials.glow.uniforms.amount.value = amount
       ;(beams.current.material as THREE.MeshBasicMaterial).opacity = amount * .43
       for (let i = 0; i < count; i++) {
         const second = i >= count / 2, fan = i % (count / 2)
@@ -198,11 +202,17 @@ function PartyVisuals({ level, shell, quality, on, reducedMotion }: Pick<Props, 
         work.dummy.quaternion.setFromUnitVectors(work.up, work.direction.normalize())
         work.dummy.scale.set(.012, length, .012); work.dummy.updateMatrix()
         beams.current.setMatrixAt(i, work.dummy.matrix)
+        glow.current?.setMatrixAt(i, work.dummy.matrix)
         work.color.setHSL(i / count + time * .012, .9, .65)
         beams.current.setColorAt(i, work.color)
+        glow.current?.setColorAt(i, work.color)
       }
       beams.current.instanceMatrix.needsUpdate = true
       if (beams.current.instanceColor) beams.current.instanceColor.needsUpdate = true
+      if (glow.current) {
+        glow.current.instanceMatrix.needsUpdate = true
+        if (glow.current.instanceColor) glow.current.instanceColor.needsUpdate = true
+      }
     }
     if (balloons.current) {
       balloons.current.count = budget.balloons
@@ -226,10 +236,11 @@ function PartyVisuals({ level, shell, quality, on, reducedMotion }: Pick<Props, 
     <mesh name="party-rock-galaxy-projection" geometry={geometry.projection} material={materials.galaxy} dispose={null} raycast={() => {}} />
     <mesh name="party-rainbow-wall-strips" geometry={geometry.accent} material={materials.rgb} dispose={null} />
     <points name="party-dancing-sky-stars" geometry={geometry.stars} material={materials.stars} dispose={null} frustumCulled={false} />
-    <mesh name="party-hot-tub-steam-haze" position={[0, floor, 0]} geometry={geometry.haze} material={materials.steam}
-      dispose={null} frustumCulled={false} renderOrder={6} raycast={() => {}} />
     <instancedMesh ref={beams} name="party-clipped-laser-fans" args={[undefined, undefined, 12]} frustumCulled={false}>
       <cylinderGeometry args={[1, 1, 1, 5]} /><meshBasicMaterial transparent depthWrite={false} toneMapped={false} />
+    </instancedMesh>
+    <instancedMesh ref={glow} name="party-soft-laser-volume" args={[undefined, undefined, 12]} frustumCulled={false}>
+      <cylinderGeometry args={[1, 1, 1, 8, 1, true]} /><primitive object={materials.glow} attach="material" />
     </instancedMesh>
     <instancedMesh ref={balloons} name="party-iridescent-bubble-balloons" args={[undefined, undefined, 5]} frustumCulled={false}>
       <sphereGeometry args={[1, 20, 12]} /><primitive object={materials.balloon} attach="material" />
