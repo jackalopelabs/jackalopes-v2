@@ -195,7 +195,8 @@ const createWallSegments = () => {
     return segments;
 };
 
-export function Platforms({ holographicVision = false, adventureStyle = false }: {
+export function Platforms({ holographicVision = false, adventureStyle = false, quality = 'low' }: {
+    quality?: string
     holographicVision?: boolean
     adventureStyle?: boolean
 }) {
@@ -515,7 +516,7 @@ export function Platforms({ holographicVision = false, adventureStyle = false }:
             ))}
             
             {/* Hunt keeps its scoring circle; Adventure has a walkable cave mouth. */}
-            {adventureStyle && <AdventureCaves surfaceMaterial={floorGridMaterial} />}
+            {adventureStyle && <AdventureCaves surfaceMaterial={floorGridMaterial} quality={quality} />}
             {!adventureStyle && <RigidBody
                 type="fixed"
                 position={[0, 0.5, 0]}

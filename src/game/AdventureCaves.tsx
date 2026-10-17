@@ -1,3 +1,4 @@
+import { CavePartyRoom } from './CavePartyRoom'
 import { useEffect, useMemo } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { RigidBody } from '@react-three/rapier'
@@ -118,7 +119,7 @@ function lakeMaterial() {
 }
 
 /** A real, walkable Adventure-only cave, reached by the central descending ramp. */
-export function AdventureCaves({ surfaceMaterial }: { surfaceMaterial?: THREE.Material }) {
+export function AdventureCaves({ surfaceMaterial, quality = 'low' }: { surfaceMaterial?: THREE.Material; quality?: string }) {
   const level = useMemo(() => loadTerrainLevel(), [])
   const cave = useMemo(() => createCaveGeometries(level), [level])
   const floorMaterial = useMemo(surveyMaterial, [])
@@ -259,6 +260,7 @@ export function AdventureCaves({ surfaceMaterial }: { surfaceMaterial?: THREE.Ma
     <CaveHotTub level={level} />
     <CaveSauna level={level} />
     <CaveRabbitHole level={level} />
+    <CavePartyRoom level={level} shell={[cave.walls, cave.ceiling]} quality={quality} />
 
     <mesh name="cave-lake-water" geometry={cave.water} material={waterMaterial} dispose={null}
       renderOrder={4} userData={{ holographicSkip: true }} raycast={() => {}} />

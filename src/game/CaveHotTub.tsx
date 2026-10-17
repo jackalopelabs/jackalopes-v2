@@ -1,3 +1,4 @@
+import { createCaveSteamGeometry, createCaveSteamMaterial } from './cave-steam'
 import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { ConvexHullCollider, MeshCollider, RigidBody } from '@react-three/rapier'
@@ -46,32 +47,12 @@ function mineralWaterMaterial() {
   })
 }
 
-/** A single inexpensive draw of soft steam wisps, with no textures or particle objects. */
-function steamGeometry() {
-  const positions: number[] = [], seeds: number[] = [], origins: number[] = [], uv: number[] = []
-  for (let puff = 0; puff < 9; puff++) {
-    const angle = puff * 2.4
-    for (const [x, y] of [[-.5, -.5], [.5, -.5], [.5, .5], [-.5, -.5], [.5, .5], [-.5, .5]]) {
-      positions.push(x, y, 0)
-      uv.push(x + .5, y + .5)
-      seeds.push(puff / 9)
-      origins.push(Math.cos(angle) * (0.55 + puff % 3 * 0.48), Math.sin(angle) * 0.95)
-    }
-  }
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
-  geometry.setAttribute('seed', new THREE.Float32BufferAttribute(seeds, 1))
-  geometry.setAttribute('origin', new THREE.Float32BufferAttribute(origins, 2))
-  return geometry
-}
-
 export function CaveHotTub({ level }: { level: TerrainLevelDocument }) {
   const floor = caveFloorAt(level, CAVE_HOT_TUB_POSITION.x, CAVE_HOT_TUB_POSITION.z)
   const geometry = useMemo(createHotTubGeometries, [])
   const waterMaterial = useMemo(mineralWaterMaterial, [])
-  const steam = useMemo(steamGeometry, [])
-  const steamUniforms = useMemo(() => ({ time: { value: 0 }, waterHeight: { value: HOT_TUB_WATER_HEIGHT } }), [])
+  const steam = useMemo(() => createCaveSteamGeometry(), [])
+  const steamMaterial = useMemo(() => createCaveSteamMaterial(HOT_TUB_WATER_HEIGHT), [])
   const effects = useRef<THREE.Group>(null)
   const reducedMotion = useRef(false)
   useEffect(() => {
@@ -85,11 +66,12 @@ export function CaveHotTub({ level }: { level: TerrainLevelDocument }) {
     Object.values(geometry).forEach(part => { if (part instanceof THREE.BufferGeometry) part.dispose() })
     waterMaterial.dispose()
     steam.dispose()
-  }, [geometry, waterMaterial, steam])
+    steamMaterial.dispose()
+  }, [geometry, waterMaterial, steam, steamMaterial])
   useFrame(({ clock, camera }) => {
     const time = reducedMotion.current ? 0 : clock.elapsedTime
     waterMaterial.uniforms.time.value = time
-    steamUniforms.time.value = time
+    steamMaterial.uniforms.time.value = time
     if (effects.current && floor !== null) effects.current.visible =
       Math.hypot(camera.position.x - CAVE_HOT_TUB_POSITION.x, camera.position.y - floor,
         camera.position.z - CAVE_HOT_TUB_POSITION.z) < 35
@@ -120,37 +102,7 @@ export function CaveHotTub({ level }: { level: TerrainLevelDocument }) {
     <group ref={effects}>
       <mesh name="hot-tub-gentle-steam" geometry={steam} dispose={null} frustumCulled={false}
         renderOrder={6} raycast={() => {}}>
-        <shaderMaterial uniforms={steamUniforms} transparent depthWrite={false} side={THREE.DoubleSide}
-          vertexShader={`
-            uniform float time;
-            uniform float waterHeight;
-            attribute float seed;
-            attribute vec2 origin;
-            varying vec2 vUv;
-            varying float vFade;
-            void main() {
-              float age = fract(time * 0.11 + seed);
-              vec3 center = vec3(origin.x + sin(age * 4.0 + seed * 12.0) * 0.22,
-                waterHeight + 0.25 + age * 1.65, origin.y);
-              vec4 view = modelViewMatrix * vec4(center, 1.0);
-              view.xy += position.xy * vec2(0.7 + age * 0.6, 0.95 + age * 0.85);
-              gl_Position = projectionMatrix * view;
-              vUv = uv;
-              vFade = sin(age * 3.14159) * 0.16;
-            }
-          `}
-          fragmentShader={`
-            varying vec2 vUv;
-            varying float vFade;
-            void main() {
-              vec2 p = (vUv - 0.5) * 2.0;
-              p.x += sin(p.y * 5.0) * 0.1;
-              float softness = exp(-dot(p, p) * 4.5) * (1.0 - smoothstep(0.6, 1.0, length(p)));
-              gl_FragColor = vec4(0.82, 0.9, 0.85, softness * vFade);
-              #include <tonemapping_fragment>
-              #include <colorspace_fragment>
-            }
-          `} />
+        <primitive object={steamMaterial} attach="material" />
       </mesh>
     </group>
     <pointLight position={[-1.2, 2.8, -1.6]} color="#ffddb0" intensity={18} distance={11} decay={1.5} />

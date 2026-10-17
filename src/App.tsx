@@ -4753,7 +4753,7 @@ export function App() {
                         )}
                     </PlayerControls>
                     {adventureMode && <AdventureCombat connectionManager={connectionManager} astronaut={adventureAvatar === 'astronaut'} playerRef={playerRef} />}
-                    <Platforms adventureStyle={adventureMode} holographicVision={goldenVisionActive} />
+                    <Platforms quality={graphicsQuality} adventureStyle={adventureMode} holographicVision={goldenVisionActive} />
                     {adventureMode && lushGrove && !compatibilityMode && <FoliageGrove quality={graphicsQuality} />}
                     <HolographicVision active={goldenVisionActive} />
                     {adventureMode && <GoldenMushroom onEat={() => setGoldenVisionUntil(Date.now() + GOLDEN_VISION_DURATION_MS)} />}
