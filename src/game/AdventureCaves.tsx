@@ -1,3 +1,4 @@
+import { CaveLifeguard } from './CaveLifeguard'
 import { CaveFixtureLight } from './CaveAtmosphere'
 import { CavePartyRoom } from './CavePartyRoom'
 import { useEffect, useMemo } from 'react'
@@ -254,7 +255,8 @@ export function AdventureCaves({ surfaceMaterial, quality = 'low' }: { surfaceMa
           roughness={1} flatShading side={THREE.DoubleSide} />
       </mesh>
     </RigidBody>
-    <CaveWaterslide />
+    <CaveWaterslide level={level} />
+    <CaveLifeguard level={level} />
     <CaveKoi waterLevel={cave.waterLevel} />
     <EverlyCaveRoom level={level} />
     <DaddyCaveRoom level={level} />

@@ -8,7 +8,7 @@ import { caveFloorAt } from './adventure-caves'
 import { canBoardWaterslide, createWaterslide, type WaterslideLayout } from './cave-waterslide'
 import { waterslideState } from './waterslide-state'
 import { waterslideRibbon, WATERSLIDE_PROFILE } from './waterslide-geometry'
-import { loadTerrainLevel } from './terrain/level-document'
+import { loadTerrainLevel, type TerrainLevelDocument } from './terrain/level-document'
 
 const SEGMENTS = 112
 const SPLASH_COUNT = 22
@@ -26,10 +26,10 @@ function makeSign(label: string) {
 }
 
 /** Fixed, rideable open channel. Boarding and movement live in the player controller. */
-export function CaveWaterslide({ layout, compact = false, label = 'SLIDE', name = 'cave-waterslide' }: {
-  layout?: WaterslideLayout; compact?: boolean; label?: string; name?: string
+export function CaveWaterslide({ layout, level: suppliedLevel, compact = false, label = 'SLIDE', name = 'cave-waterslide' }: {
+  level?: TerrainLevelDocument; layout?: WaterslideLayout; compact?: boolean; label?: string; name?: string
 } = {}) {
-  const level = useMemo(() => loadTerrainLevel(), [])
+  const level = useMemo(() => suppliedLevel ?? loadTerrainLevel(), [suppliedLevel])
   const slide = useMemo(() => layout ?? createWaterslide(level), [level, layout])
   const sign = useMemo(() => makeSign(label), [label])
   const [boardingHint, setBoardingHint] = useState(false)

@@ -1,3 +1,4 @@
+import { lifeguardMotion } from './cave-lifeguard'
 import { UnderwaterBubbles } from './UnderwaterBubbles'
 import { adventureCombatState, type AdventureHit } from './adventure-combat-state'
 import { MercModel } from './MercModel'
@@ -192,7 +193,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
     }, [adventureMode])
     const slideRide = useRef<{ layout: WaterslideLayout; progress: number; elapsed: number; origin: THREE.Vector3 } | null>(null)
     const slideInteractHeld = useRef(false)
-    useEffect(() => () => { slideRide.current = null; waterslideState.active = false }, [adventureMode])
+    useEffect(() => () => { slideRide.current = null; waterslideState.active = false; lifeguardMotion.enabled = false }, [adventureMode])
     
     // Track last server sync
     const lastStateTime = useRef(0)
@@ -762,6 +763,14 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         // Update global player position and rotation for mushroom proximity detection and decoy spawning
         window.__localPlayerPosition = position.current
         window.__localPlayerRotation = rotation.current
+        // Both adventure appearances share this controller. Publish actual post-collision
+        // position/contact plus locomotion state; the lookout never reads movement keys.
+        lifeguardMotion.x = position.current.x; lifeguardMotion.y = position.current.y; lifeguardMotion.z = position.current.z
+        lifeguardMotion.at = performance.now(); lifeguardMotion.sprint = !!isSprinting
+        lifeguardMotion.grounded = characterController.current.computedGrounded() && !isJumping
+        lifeguardMotion.autoHop = isHopping.current && !isJumping
+        lifeguardMotion.swimming = swimming; lifeguardMotion.riding = !!riding
+        lifeguardMotion.enabled = adventureMode && !isRespawning && !combatDead
 
         if (
             connectionManager?.isReadyToSend?.() &&
