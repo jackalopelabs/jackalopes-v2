@@ -2,12 +2,12 @@ import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode, 
 import { useFrame, useThree, type ThreeElements } from '@react-three/fiber'
 import * as THREE from 'three'
 import { loadTerrainLevel, type TerrainLevelDocument } from './terrain/level-document'
-import { caveAirWeight, createCaveFogOwner, partyLightScale, PARTY_AIR_DENSITY } from './cave-atmosphere'
+import { caveAirWeight, createCaveFogLayer, createCaveFogOwner, partyLightScale, PARTY_AIR_DENSITY } from './cave-atmosphere'
 import { stepPartyBlend } from './cave-party-state'
 
 type Atmosphere = ReturnType<typeof createAtmosphere>
 function createAtmosphere(scene: THREE.Scene) {
-  const fog = createCaveFogOwner(scene), layer = fog.add(10)
+  const fog = createCaveFogOwner(scene), layer = createCaveFogLayer(10)
   return { fog, layer, clearPartyFog: () => { layer.fog = null; fog.update() }, on: false, blend: 0, air: 0, nightVision: false,
     reducedMotion: false, low: true, age: 0, time: 0 }
 }
@@ -23,7 +23,9 @@ export function CaveAtmosphereProvider({ children, enabled = true, nightVision =
   const atmosphere = useMemo(() => createAtmosphere(scene), [scene])
   const partyFog = useMemo(() => new THREE.FogExp2('#696482', 0), [])
   const layer = atmosphere.layer
-  useEffect(() => { atmosphere.fog.retain(layer); return () => { atmosphere.fog.remove(layer); atmosphere.fog.dispose() } }, [atmosphere, layer])
+  // Each effect owns only its own lease. Never clear child/sauna registrations in
+  // provider cleanup: StrictMode may replay their setup in a different order.
+  useEffect(() => atmosphere.fog.register(layer), [atmosphere, layer])
   useFrame(({ camera }, delta) => {
     atmosphere.nightVision = nightVision
     atmosphere.blend = enabled ? stepPartyBlend(atmosphere.blend, atmosphere.on, delta) : 0
@@ -48,9 +50,9 @@ export function useCaveFogLayer(priority: number) {
   // Standalone room previews still get safe ownership without needing the App provider.
   const fallback = useMemo(() => atmosphere ? null : createCaveFogOwner(scene), [atmosphere, scene])
   const owner = atmosphere?.fog ?? fallback!
-  const layer = useMemo(() => owner.add(priority), [owner, priority])
+  const layer = useMemo(() => createCaveFogLayer(priority), [owner, priority])
   useFrame(() => { fallback?.update() }, -1)
-  useEffect(() => { owner.retain(layer); return () => { owner.remove(layer); fallback?.dispose() } }, [owner, layer, fallback])
+  useEffect(() => owner.register(layer), [owner, layer])
   return layer
 }
 

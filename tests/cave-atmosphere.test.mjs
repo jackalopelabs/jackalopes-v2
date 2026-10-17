@@ -3,13 +3,14 @@ import { test } from 'node:test'
 import { build } from 'esbuild'
 import * as THREE from 'three'
 const compiled = await build({stdin:{contents:`export * from './src/game/cave-atmosphere';export * from './src/game/hot-tub-party-steam';export * from './src/game/terrain/level-document';export {caveFloorAt,caveCeilingAt,caveLayout} from './src/game/adventure-caves';export {CAVE_HOT_TUB_POSITION,HOT_TUB_WATER_HEIGHT} from './src/game/cave-hot-tub';`,resolveDir:process.cwd()},bundle:true,format:'esm',platform:'node',write:false})
-const {createCaveFogOwner,caveAirWeight,partyLightScale,PARTY_AIR_DENSITY,createHotTubSteamPaths,sampleHotTubSteamPath,
+const {createCaveFogOwner,createCaveFogLayer,caveAirWeight,partyLightScale,PARTY_AIR_DENSITY,createHotTubSteamPaths,sampleHotTubSteamPath,
   createHotTubSteamResources,steamPointInside,steamAirFloor,createTerrainLevel,caveFloorAt,caveCeilingAt,caveLayout,
   STEAM_BUDGET,STEAM_PATH_NODES,CAVE_HOT_TUB_POSITION,HOT_TUB_WATER_HEIGHT}=await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
 
 test('one fog owner composes party and sealed sauna; release order cannot restore stale party fog',()=>{
   const ordinary=new THREE.Fog('#123456',70,340), scene={fog:ordinary}, owner=createCaveFogOwner(scene)
-  const party=owner.add(10),sauna=owner.add(100),partyFog=new THREE.FogExp2('#696482',.028),saunaFog=new THREE.FogExp2('#c7c9b5',.7)
+  const party=createCaveFogLayer(10),sauna=createCaveFogLayer(100),partyFog=new THREE.FogExp2('#696482',.028),saunaFog=new THREE.FogExp2('#c7c9b5',.7)
+  const releaseParty=owner.register(party),releaseSauna=owner.register(sauna)
   party.fog=partyFog;owner.update();assert.equal(scene.fog,partyFog)
   sauna.fog=saunaFog;owner.update();assert.equal(scene.fog,saunaFog)
   party.fog=null;owner.update();assert.equal(scene.fog,saunaFog)
@@ -19,20 +20,21 @@ test('one fog owner composes party and sealed sauna; release order cannot restor
     sauna.fog=null;owner.update();assert.equal(scene.fog,partyFog)
     party.fog=null;owner.update();assert.equal(scene.fog,ordinary)
   }
-  party.fog=partyFog;sauna.fog=saunaFog;owner.update();owner.remove(party);assert.equal(scene.fog,saunaFog)
-  owner.remove(sauna);assert.equal(scene.fog,ordinary)
+  party.fog=partyFog;sauna.fog=saunaFog;owner.update();releaseParty();assert.equal(scene.fog,saunaFog)
+  releaseSauna();assert.equal(scene.fog,ordinary)
   owner.dispose();assert.equal(scene.fog,ordinary)
 })
 test('App/night-vision fog changes during party survive OFF, sauna exit and provider unmount',()=>{
   const initial=new THREE.Fog('#123456',70,340),scene={fog:initial},owner=createCaveFogOwner(scene)
-  const party=owner.add(10),sauna=owner.add(100)
+  const party=createCaveFogLayer(10),sauna=createCaveFogLayer(100)
+  owner.register(party);owner.register(sauna)
   party.fog=new THREE.FogExp2('#696482',.028);owner.update()
   const nightVision=new THREE.Fog('#173624',10,70)
   scene.fog=nightVision;owner.update()
   sauna.fog=new THREE.FogExp2('#c7c9b5',.7);owner.update()
   party.fog=null;sauna.fog=null;owner.update();assert.equal(scene.fog,nightVision)
   party.fog=new THREE.FogExp2('#696482',.028);owner.update();owner.dispose();assert.equal(scene.fog,nightVision)
-  const owner2=createCaveFogOwner(scene),layer=owner2.add(10);layer.fog=new THREE.FogExp2('#fff',.1);owner2.update()
+  const owner2=createCaveFogOwner(scene),layer=createCaveFogLayer(10);owner2.register(layer);layer.fog=new THREE.FogExp2('#fff',.1);owner2.update()
   scene.fog=null;owner2.dispose();assert.equal(scene.fog,null,'unmount must not resurrect a disabled App fog')
 })
 const level=createTerrainLevel(),floor=caveFloorAt(level,0,-187)
@@ -93,4 +95,38 @@ test('bounded GPU wisps cover all eight source paths at low quality and contain 
   }
   assert(Array.from(data).every(Number.isFinite));assert(Array.from(air).every(Number.isFinite))
   resources.geometry.dispose();resources.trajectory.dispose();resources.air.dispose()
+})
+
+
+test('effect leases survive StrictMode cleanup/setup replay in either parent/child order',()=>{
+  for(const childFirst of [false,true]){
+    const base=new THREE.Fog('#123456',70,340),scene={fog:base},owner=createCaveFogOwner(scene)
+    const party=createCaveFogLayer(10),sauna=createCaveFogLayer(100)
+    party.fog=new THREE.FogExp2('#696482',.028);sauna.fog=new THREE.FogExp2('#c7c9b5',.7)
+    // Allocation alone must not make render-discarded layers active.
+    owner.update();assert.equal(scene.fog,base)
+    let releaseParty=owner.register(party),releaseSauna=owner.register(sauna)
+    owner.update();assert.equal(scene.fog,sauna.fog)
+    for(let replay=0;replay<3;replay++){
+      if(childFirst){releaseSauna();releaseParty()}else{releaseParty();releaseSauna()}
+      assert.equal(scene.fog,base)
+      if(childFirst){releaseSauna=owner.register(sauna);releaseParty=owner.register(party)}
+      else{releaseParty=owner.register(party);releaseSauna=owner.register(sauna)}
+      owner.update();assert.equal(scene.fog,sauna.fog)
+      // Provider/party replay alone must not destroy a live child lease.
+      releaseParty();releaseParty=owner.register(party);owner.update();assert.equal(scene.fog,sauna.fog)
+    }
+    releaseSauna();assert.equal(scene.fog,party.fog)
+    releaseParty();assert.equal(scene.fog,base)
+    const remounted=owner.register(party);owner.update();assert.equal(scene.fog,party.fog)
+    remounted();assert.equal(scene.fog,base)
+  }
+})
+test('stale or repeated cleanup cannot delete a renewed lease or overwrite a new base fog',()=>{
+  const scene={fog:new THREE.Fog('#123456',70,340)},owner=createCaveFogOwner(scene),layer=createCaveFogLayer(10)
+  layer.fog=new THREE.FogExp2('#696482',.028)
+  const stale=owner.register(layer),current=owner.register(layer)
+  owner.update();stale();stale();assert.equal(scene.fog,layer.fog)
+  const updatedBase=new THREE.Fog('#173624',10,70);scene.fog=updatedBase;owner.update()
+  current();assert.equal(scene.fog,updatedBase);stale();current();assert.equal(scene.fog,updatedBase)
 })
