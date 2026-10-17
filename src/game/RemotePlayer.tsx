@@ -1,3 +1,4 @@
+import { UnderwaterBubbles } from './UnderwaterBubbles';
 import React, { useRef, useState, useEffect, useImperativeHandle, forwardRef, useMemo, useCallback } from 'react';
 import * as THREE from 'three';
 import { Html, Clone, useGLTF } from '@react-three/drei';
@@ -1386,6 +1387,9 @@ export const RemotePlayer: React.FC<RemotePlayerProps> = ({
           )}
         </RigidBody>
 
+        <UnderwaterBubbles avatar={adventureAvatar} source={jackalopeModelGroupRef}
+          caves={window.jackalopesGame?.gameMode === 'adventure'}
+          enabled={!isHit && !isRespawning && !combatHidden} />
         {/* Model group OUTSIDE RigidBody — positioned in world space, matching local jackalope */}
         {!isHit && (
           <group

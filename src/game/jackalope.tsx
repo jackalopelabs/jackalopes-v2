@@ -1,3 +1,4 @@
+import { UnderwaterBubbles } from './UnderwaterBubbles'
 import { adventureCombatState, type AdventureHit } from './adventure-combat-state'
 import { MercModel } from './MercModel'
 import Rapier from '@dimforge/rapier3d-compat'
@@ -1008,6 +1009,9 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
 
     return (
         <>
+            <UnderwaterBubbles avatar={adventureMode ? adventureAvatar : 'jackalope'}
+                source={jackalopeLeanRef} body={position} yaw={rotation} caves={adventureMode}
+                enabled={!combatDead && !isRespawning} />
             {/* Physics body - for collision only */}
             <Entity isPlayer ref={jackalopeRef}>
                 <Component name="rigidBody">
