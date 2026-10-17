@@ -93,13 +93,16 @@ export function CaveLifeguard({ level, network, sample, onReaction }: Props) {
     <mesh position={[0, .87, 0]}><boxGeometry args={[1.6, .18, 1.3]} /><meshStandardMaterial color="#c73d4c" roughness={.7} /></mesh>
     <group ref={lookout} position={[0, .96, -.18]} rotation={[0, -.65, 0]}>
       <JackalopeModel scale={[2.2, 2.2, 2.2]} />
-      <mesh name="lifeguard-red-visor" position={[0, 1.55, -.28]} rotation={[.08, 0, 0]}><cylinderGeometry args={[.47, .47, .1, 16]} /><meshStandardMaterial color="#dd3f4e" roughness={.7} /></mesh>
-      <mesh position={[0, 1.56, -.57]}><boxGeometry args={[.65, .06, .4]} /><meshStandardMaterial color="#dd3f4e" /></mesh>
-      <mesh position={[0, 1.61, -.46]}><boxGeometry args={[.13, .025, .3]} /><meshBasicMaterial color="#fff6e8" /></mesh>
-      <mesh name="lifeguard-lanyard" position={[0, 1.12, -.49]} rotation={[Math.PI / 2, 0, 0]}><torusGeometry args={[.26, .025, 6, 18]} /><meshStandardMaterial color="#f8efe0" /></mesh>
-      <mesh name="lifeguard-whistle" position={[0, .9, -.57]} rotation={[0, 0, -.25]}><boxGeometry args={[.17, .12, .22]} /><meshStandardMaterial color="#dbe1e3" metalness={.65} roughness={.25} /></mesh>
+      <mesh name="lifeguard-red-visor" position={[0, 1.65, .2]} rotation={[.08, 0, 0]}><cylinderGeometry args={[.36, .36, .1, 16]} /><meshStandardMaterial color="#dd3f4e" roughness={.7} /></mesh>
+      <mesh position={[0, 1.66, .53]}><boxGeometry args={[.65, .06, .4]} /><meshStandardMaterial color="#dd3f4e" /></mesh>
+      <mesh position={[0, 1.71, .42]}><boxGeometry args={[.13, .025, .3]} /><meshBasicMaterial color="#fff6e8" /></mesh>
+      <mesh name="lifeguard-lanyard" position={[0, 1.22, .54]}><torusGeometry args={[.22, .025, 6, 18]} /><meshStandardMaterial color="#f8efe0" /></mesh>
+      <mesh name="lifeguard-whistle" position={[0, .99, .57]} rotation={[0, 0, -.25]}><boxGeometry args={[.17, .12, .22]} /><meshStandardMaterial color="#dbe1e3" metalness={.65} roughness={.25} /></mesh>
     </group>
-    <mesh name="lifeguard-sign" position={[0, 2.8, .96]}><planeGeometry args={[3.2, 1.2]} /><meshBasicMaterial map={sign} side={THREE.DoubleSide} toneMapped={false} /></mesh>
+    {[-1, 1].map(side => <mesh key={side} name={side === 1 ? 'lifeguard-sign' : 'lifeguard-sign-back'}
+      position={[0, 1.4, .96 + side * .006]} rotation={[0, side === 1 ? 0 : Math.PI, 0]}>
+      <planeGeometry args={[2.8, 1.05]} /><meshBasicMaterial map={sign} toneMapped={false} />
+    </mesh>)}
     <mesh position={[1.25, 1.3, -.25]} rotation={[0, -.65, 0]}><torusGeometry args={[.44, .12, 8, 20]} /><meshStandardMaterial color="#e3545b" roughness={.55} /></mesh>
     {cue && <Html center position={[0, 4, 0]} zIndexRange={[25, 0]} style={{ pointerEvents: 'none', whiteSpace: 'nowrap' }}>
       <div role="status" style={{ padding: '8px 13px', background: '#f4eddfed', color: '#923340', border: '2px solid #c94e59', borderRadius: 12, font: 'bold 14px sans-serif' }}>♪ {guardMessage(cue)}</div>
