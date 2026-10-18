@@ -13,7 +13,7 @@ const destroyed = new Set<string>()
 const registrations = new Map<string, Set<AdventureDestructible>>()
 export const isAdventureObjectDestroyed = (id: string) => destroyed.has(id)
 const validId = (id: unknown): id is string => typeof id === 'string' && id.length < 96 &&
-  /^(?:(?:mushroom|golden-egg|green-egg|rainbow-egg)-\d{1,5}|golden-mushroom|cave-koi-[0-7]|water-shark-[0-5]|vegetation-[0-9a-f]{1,8})$/.test(id)
+  /^(?:(?:mushroom|golden-egg|green-egg|rainbow-egg)-\d{1,5}|golden-mushroom|cave-koi-[0-7]|water-shark-[0-5]|cave-lifeguard|vegetation-[0-9a-f]{1,8})$/.test(id)
 export const getDestroyedAdventureObjectIds = () => [...destroyed].slice(0, 2048)
 
 /** State replay can arrive before asset loading completes. Registration applies pending IDs. */

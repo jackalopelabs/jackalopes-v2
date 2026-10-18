@@ -6,6 +6,7 @@ import { JackalopeModel } from './JackalopeModel'
 import { createLifeguardRules, createGuardReactionGate, guardMessage, LIFEGUARD, lifeguardMotion,
   type GuardMotion, type GuardReason, type GuardEvent } from './cave-lifeguard'
 import { createLifeguardWhistle } from './lifeguard-whistle'
+import { isAdventureObjectDestroyed, useAdventureDestructible } from './adventure-destructibles'
 import type { TerrainLevelDocument } from './terrain/level-document'
 
 type Network = { sendMessage(message: unknown): unknown; on(event: string, fn: (value: unknown) => void): unknown;
@@ -34,10 +35,14 @@ export function CaveLifeguard({ level, network, sample, onReaction }: Props) {
   const [cue, setCue] = useState<GuardReason | null>(null)
   const cueRef = useRef<GuardReason | null>(null)
   const { x, y, z } = rules.position
-  useEffect(() => { sound.current = createLifeguardWhistle(network !== false); return () => { sound.current?.dispose(); sound.current = undefined; rules.reset() } }, [rules, network])
+  const defeated = useAdventureDestructible(LIFEGUARD.objectId, [x, y, z], LIFEGUARD.hitRadius, true, LIFEGUARD.hitHeight)
+  useEffect(() => {
+    if (!defeated) sound.current = createLifeguardWhistle(network !== false)
+    return () => { sound.current?.dispose(); sound.current = undefined; rules.reset() }
+  }, [rules, network, defeated])
   useEffect(() => () => sign.dispose(), [sign])
   receiveRef.current = (value, remote) => {
-    if (document.visibilityState !== 'visible') return
+    if (defeated || isAdventureObjectDestroyed(LIFEGUARD.objectId) || document.visibilityState !== 'visible') return
     // Validate the claimed offense is actually in this cave, before consuming a reaction slot.
     const event = value as GuardEvent | null
     if (!event || !Array.isArray(event.position) || event.position.length !== 3 ||
@@ -67,6 +72,15 @@ export function CaveLifeguard({ level, network, sample, onReaction }: Props) {
     return () => { clearInterval(poll); manager?.off('game_event', receive); sendRef.current = undefined }
   }, [network])
   useFrame((_, dt) => {
+    // The shared destruction register changes synchronously, before React hides the model.
+    // Suppress both locally detected offenses and delayed remote whistle reactions immediately.
+    if (defeated || isAdventureObjectDestroyed(LIFEGUARD.objectId)) {
+      if (lookout.current) lookout.current.visible = false
+      sound.current?.dispose(); sound.current = undefined
+      if (cueRef.current) { cueRef.current = null; setCue(null) }
+      elapsed.current = 0; warnedUntil.current = 0; rules.reset()
+      return
+    }
     const now = performance.now()
     if (lookout.current) {
       const reduced = preference.matches
@@ -91,7 +105,7 @@ export function CaveLifeguard({ level, network, sample, onReaction }: Props) {
     {[-1, 1].flatMap(a => [-.85, .85].map(b => <mesh key={`${a},${b}`} position={[a, .3, b]}><boxGeometry args={[.16, .65, .16]} /><meshStandardMaterial color="#8b6050" roughness={.9} /></mesh>))}
     <mesh position={[0, 1.28, .7]}><boxGeometry args={[1.6, 1.15, .15]} /><meshStandardMaterial color="#f0e6d6" roughness={.75} /></mesh>
     <mesh position={[0, .87, 0]}><boxGeometry args={[1.6, .18, 1.3]} /><meshStandardMaterial color="#c73d4c" roughness={.7} /></mesh>
-    <group ref={lookout} position={[0, .96, -.18]} rotation={[0, -.65, 0]}>
+    <group ref={lookout} name="cave-lifeguard-actor" visible={!defeated} position={[0, .96, -.18]} rotation={[0, -.65, 0]}>
       <JackalopeModel scale={[2.2, 2.2, 2.2]} />
       <mesh name="lifeguard-red-visor" position={[0, 1.65, .2]} rotation={[.08, 0, 0]}><cylinderGeometry args={[.36, .36, .1, 16]} /><meshStandardMaterial color="#dd3f4e" roughness={.7} /></mesh>
       <mesh position={[0, 1.66, .53]}><boxGeometry args={[.65, .06, .4]} /><meshStandardMaterial color="#dd3f4e" /></mesh>
@@ -104,7 +118,7 @@ export function CaveLifeguard({ level, network, sample, onReaction }: Props) {
       <planeGeometry args={[2.8, 1.05]} /><meshBasicMaterial map={sign} toneMapped={false} />
     </mesh>)}
     <mesh position={[1.25, 1.3, -.25]} rotation={[0, -.65, 0]}><torusGeometry args={[.44, .12, 8, 20]} /><meshStandardMaterial color="#e3545b" roughness={.55} /></mesh>
-    {cue && <Html center position={[0, 4, 0]} zIndexRange={[25, 0]} style={{ pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+    {!defeated && cue && <Html center position={[0, 4, 0]} zIndexRange={[25, 0]} style={{ pointerEvents: 'none', whiteSpace: 'nowrap' }}>
       <div role="status" style={{ padding: '8px 13px', background: '#f4eddfed', color: '#923340', border: '2px solid #c94e59', borderRadius: 12, font: 'bold 14px sans-serif' }}>♪ {guardMessage(cue)}</div>
     </Html>}
   </group>

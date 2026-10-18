@@ -9,7 +9,8 @@ export type GuardMotion = { x: number; y: number; z: number; at: number; sprint:
 /** Local controller-owned sample, shared by BOTH adventure avatar appearances. Never networked. */
 export const lifeguardMotion: GuardMotion = { x: 0, y: 0, z: 0, at: -Infinity, sprint: false,
   grounded: false, autoHop: false, swimming: false, riding: false, enabled: false }
-export const LIFEGUARD = { x: 8.5, z: -87, range: 72, cooldown: 8 } as const
+export const LIFEGUARD = { x: 8.5, z: -87, range: 72, cooldown: 8,
+  objectId: 'cave-lifeguard', hitHeight: 2, hitRadius: 1 } as const
 export const guardMessage = (reason: GuardReason) => reason === 'run' ? 'Walk, please!' : 'Down the slide, please!'
 
 /** Prebaked arc-length polyline: projection follows the actual curved trough, not global Z. */
