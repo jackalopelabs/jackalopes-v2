@@ -1,4 +1,7 @@
 import { lifeguardMotion } from './cave-lifeguard'
+import { SHARK_BITE_EVENT, sharkPlayerState } from './water-sharks'
+import { SWIM_SPEED, SWIM_SPRINT_SPEED } from './terrain/swim-speeds'
+import { caveFloorAt } from './adventure-caves'
 import { UnderwaterBubbles } from './UnderwaterBubbles'
 import { adventureCombatState, type AdventureHit } from './adventure-combat-state'
 import { MercModel } from './MercModel'
@@ -303,7 +306,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
 
             // If this was sent for our player ID, handle the respawn
             // Skip the propPlayerId check as it's causing problems
-            if (localPlayerId) {
+            if (localPlayerId || adventureMode) {
                 slideRide.current = null; waterslideState.active = false; velocity.current.set(0, 0, 0);
                 console.log('🐰 Jackalope processing respawn event', event.detail);
                 
@@ -378,7 +381,39 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         } catch (error) {
             console.error(`🐰 Error handling respawn after scoring:`, error);
         }
-    }, [connectionManager]);
+    }, [connectionManager, adventureMode]);
+
+    useEffect(() => {
+        if (!adventureMode) return
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const caught = () => {
+            if (Date.now() < sharkPlayerState.immuneUntil || slideRide.current || !wasSwimming.current) return
+            sharkPlayerState.caughtUntil = Date.now() + 650
+            sharkPlayerState.immuneUntil = Date.now() + 6000
+            lifeguardMotion.enabled = false
+            velocity.current.set(0, 0, 0)
+            if (jackalopeModelRef.current) jackalopeModelRef.current.visible = false
+            if (fpModelRef.current) fpModelRef.current.visible = false
+            timer = setTimeout(() => {
+                // Use the dry upper shore beside the lookout when caught in the cave.
+                const level = loadTerrainLevel()
+                const cave = caveFloorAt(level, position.current.x, position.current.z)
+                const spawn: [number, number, number] = cave !== null && position.current.y < cave + 20
+                    ? [4, caveFloorAt(level, 4, -87)! + 1.85, -87]
+                    : (window.jackalopesGame?.spawnManager?.getSpawnPoint() ?? [-100, 3, 10])
+                sharkPlayerState.caughtUntil = 0
+                handleRespawn(new CustomEvent('player_respawned', { detail: { position: spawn } }))
+                connectionManager?.sendRespawnRequest(connectionManager.getPlayerId()!, spawn)
+                if (fpModelRef.current) fpModelRef.current.visible = true
+            }, 650)
+        }
+        window.addEventListener(SHARK_BITE_EVENT, caught)
+        return () => {
+            window.removeEventListener(SHARK_BITE_EVENT, caught)
+            if (timer) clearTimeout(timer)
+            sharkPlayerState.caughtUntil = 0
+        }
+    }, [adventureMode, handleRespawn, connectionManager])
     
     useEffect(() => {
         // Add event listener
@@ -522,7 +557,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
             }
         }
         
-        if (adventureMode && Date.now() < adventureCombatState.deadUntil) {
+        if (adventureMode && (Date.now() < adventureCombatState.deadUntil || Date.now() < sharkPlayerState.caughtUntil)) {
             velocity.current.set(0, 0, 0)
             window.__localPlayerInteract = false
             return
@@ -631,7 +666,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         
         if (hasMovementInput) {
             // Calculate speed
-            const speed = swimming ? (isSprinting ? 6.5 : 4.5) : BASE_SPEED * (isSprinting ? RUN_MULTIPLIER : 1.0)
+            const speed = swimming ? (isSprinting ? SWIM_SPRINT_SPEED : SWIM_SPEED) : BASE_SPEED * (isSprinting ? RUN_MULTIPLIER : 1.0)
             
             // Apply horizontal movement
             velocity.current.x = moveDirection.x * speed
