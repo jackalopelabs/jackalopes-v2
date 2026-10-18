@@ -8,7 +8,7 @@ export const SHARK_BITE_EVENT = 'jackalopes:shark-bite'
 export const sharkPlayerState = { caughtUntil: 0, immuneUntil: 0 }
 export type SharkPoint = { x: number; y: number; z: number }
 export type SharkSwimmer = SharkPoint & { enabled: boolean; swimming: boolean; riding: boolean; immune: boolean }
-export type Shark = SharkPoint & { id: number; heading: number; homeX: number; homeZ: number; kind: 'cave' | 'surface'; target: string | null; returnUntil?: number }
+export type Shark = SharkPoint & { id: number; heading: number; homeX: number; homeZ: number; kind: 'cave' | 'surface'; target: string | null; returnUntil?: number; dead?: boolean }
 const finitePoint = (p: SharkPoint) => p && [p.x, p.y, p.z].every(Number.isFinite)
 const distance = (a: SharkPoint, b: SharkPoint) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 
@@ -48,7 +48,7 @@ export function createSharks(level: TerrainLevelDocument): Shark[] {
 }
 
 export function sharkCanChase(level: TerrainLevelDocument, shark: Shark, swimmer: SharkSwimmer) {
-  if (!finitePoint(swimmer) || !swimmer.enabled || !swimmer.swimming || swimmer.riding || swimmer.immune) return false
+  if (shark.dead || !finitePoint(swimmer) || !swimmer.enabled || !swimmer.swimming || swimmer.riding || swimmer.immune) return false
   const water = shark.kind === 'cave'
     ? caveWaterSurfaceAt(level, swimmer.x, swimmer.y, swimmer.z, true)
     : sampleSwimWater(level, swimmer.x, swimmer.y, swimmer.z, true)
@@ -61,6 +61,7 @@ export function stepSharks(level: TerrainLevelDocument, sharks: Shark[], swimmer
   if (!Number.isFinite(dt) || dt <= 0 || dt > .25) return
   dt = Math.min(dt, .05)
   for (const shark of sharks) {
+    if (shark.dead) { shark.target = null; continue }
     let nearest: SharkSwimmer | undefined, best = Infinity
     shark.target = null
     for (const [actor, swimmer] of swimmers) {

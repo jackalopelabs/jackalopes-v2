@@ -6,6 +6,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import type { TerrainLevelDocument } from './terrain/level-document'
 import { lifeguardMotion } from './cave-lifeguard'
 import { adventureCombatState } from './adventure-combat-state'
+import { isAdventureObjectDestroyed, registerAdventureDestructible } from './adventure-destructibles'
 import { SHARK_BITE_EVENT, SHARK_SPEED, createSharkBiteGate, createSharkPeer, sharkPlayerState, type Shark, type SharkSwimmer } from './water-sharks'
 
 type Network = { sendMessage(message: unknown): unknown; on(event: string, fn: (event: unknown) => void): unknown;
@@ -65,10 +66,36 @@ export function WaterSharks({ level, network, sample, onBite }: Props) {
   const time = useMemo(() => ({ value: 0 }), [])
   const meshes = useRef<(THREE.Mesh | null)[]>([])
   const chomps = useRef<number[]>([])
-  const cueUntil = useRef(0), [caught, setCaught] = useState(false)
+  const deaths = useRef<number[]>([])
+  const cueUntil = useRef(0), [notice, setNotice] = useState<string | null>(null)
   const cue = useRef<THREE.Group>(null)
   const lastFrame = useRef(0)
   const sampleRef = useRef(sample); sampleRef.current = sample
+  useEffect(() => {
+    const unregister = displayed.map((shown, i) => {
+      const id = `water-shark-${shown.id}`, point = new THREE.Vector3()
+      return registerAdventureDestructible(id, {
+        radius: 1.65,
+        position: () => shown.dead || isAdventureObjectDestroyed(id) || !lastFrame.current
+          ? null : point.set(shown.x, shown.y, shown.z),
+        destroy: () => {
+          if (shown.dead) return
+          shown.dead = true; peer.sharks[i].dead = true
+          deaths.current[i] = performance.now()
+          const player = window.__localPlayerPosition
+          if (lastFrame.current && player && point.set(shown.x, shown.y, shown.z).distanceTo(player) < 30) {
+            cueUntil.current = performance.now() + 2000; setNotice('Shark down!')
+          }
+        },
+      })
+    })
+    const reset = () => {
+      deaths.current = []
+      for (let i = 0; i < displayed.length; i++) { displayed[i].dead = false; peer.sharks[i].dead = false }
+    }
+    window.addEventListener('jackalopesRoundReset', reset)
+    return () => { unregister.forEach(remove => remove()); window.removeEventListener('jackalopesRoundReset', reset) }
+  }, [displayed, peer])
   useEffect(() => {
     material.onBeforeCompile = shader => {
       shader.uniforms.sharkTime = time
@@ -129,16 +156,24 @@ export function WaterSharks({ level, network, sample, onBite }: Props) {
       shown.heading = state.heading
       mesh.position.set(shown.x, shown.y, shown.z)
       mesh.rotation.y = shown.heading
+      if (shown.dead) {
+        const progress = Math.min(1, (now - (deaths.current[i] ?? now)) / 800)
+        mesh.visible = progress < 1
+        mesh.rotation.z = progress * Math.PI
+        mesh.position.y -= progress * .7
+        continue
+      }
+      mesh.visible = true; mesh.rotation.z = 0
       const chomp = Math.max(0, (chomps.current[i] - now) / 700) || 0
       mesh.rotation.x = -Math.sin(chomp * Math.PI * 2) * .12
       mesh.scale.set(1, 1 + Math.sin(chomp * Math.PI) * .14, 1)
     }
     if (cue.current) cue.current.position.set(source.x, source.y + 2.2, source.z)
-    if (caught && now > cueUntil.current) setCaught(false)
+    if (notice && now > cueUntil.current) setNotice(null)
     if (!visible || paused) return
     const id = biteGate.tryBite(level, displayed, source, now, peer.fresh(now))
     if (id === null) return
-    chomps.current[id] = now + 700; cueUntil.current = now + 2400; setCaught(true)
+    chomps.current[id] = now + 700; cueUntil.current = now + 2400; setNotice('Chomp! A shark got you!')
     peer.chomp(id, now)
     if (onBite) onBite(id)
     else window.dispatchEvent(new CustomEvent(SHARK_BITE_EVENT, { detail: { shark: id } }))
@@ -146,9 +181,9 @@ export function WaterSharks({ level, network, sample, onBite }: Props) {
   return <group name="water-sharks" userData={{ holographicSkip: true }}>
     {displayed.map((shark: Shark, i: number) => <mesh key={shark.id} ref={el => { meshes.current[i] = el }}
       name={`water-shark-${shark.id}`} geometry={geometry} material={material} dispose={null} frustumCulled={false} />)}
-    <group ref={cue}>{caught && <Html center style={{ pointerEvents: 'none', whiteSpace: 'nowrap' }} zIndexRange={[26, 0]}>
+    <group ref={cue}>{notice && <Html center style={{ pointerEvents: 'none', whiteSpace: 'nowrap' }} zIndexRange={[26, 0]}>
       <div role="status" style={{ background: '#102f47ee', color: '#e6faff', border: '2px solid #69b9cc', borderRadius: 14,
-        padding: '9px 14px', font: 'bold 14px sans-serif' }}>🦈 Chomp! A shark got you!</div>
+        padding: '9px 14px', font: 'bold 14px sans-serif' }}>🦈 {notice}</div>
     </Html>}</group>
   </group>
 }

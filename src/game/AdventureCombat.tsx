@@ -6,8 +6,10 @@ import { ConnectionManager } from '../network/ConnectionManager'
 import { getActiveGamepad } from '../common/hooks/use-gamepad'
 import { adventureDestructibles, destroyAdventureObject, getDestroyedAdventureObjectIds, applyDestroyedAdventureObjectIds } from './adventure-destructibles'
 import { adventureCombatState } from './adventure-combat-state'
+import { adventureSolidDistance, bindAdventureMouseFire, createAdventureFireInput } from './adventure-fire'
+import { sharkPlayerState } from './water-sharks'
 
-const RANGE = 24, INTERVAL = 180, PARTICLES = 128
+const RANGE = 24, PARTICLES = 128
 const validVector = (v: unknown): v is [number, number, number] => Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) < 2000)
 type Shot = { event_type: 'adventure_fire'; shotId: string; player?: string; origin: [number, number, number]; direction: [number, number, number]; distance: number; target?: string; objectId?: string }
 
@@ -15,8 +17,8 @@ type Shot = { event_type: 'adventure_fire'; shotId: string; player?: string; ori
 export function AdventureCombat({ connectionManager, astronaut, playerRef }: { connectionManager: ConnectionManager; astronaut: boolean; playerRef: React.RefObject<any> }) {
   const { gl, camera, scene } = useThree()
   const { world, rapier } = useRapier()
-  const wasShooting = useRef(false)
-  const mouse = useRef(false), lastFire = useRef(0), counter = useRef(0)
+  const input = useMemo(createAdventureFireInput, [])
+  const counter = useRef(0)
   const particles = useRef<THREE.InstancedMesh>(null)
   const seen = useRef(new Set<string>())
   const bursts = useRef<{ at: number; origin: THREE.Vector3; direction: THREE.Vector3; distance: number }[]>([])
@@ -46,32 +48,26 @@ export function AdventureCombat({ connectionManager, astronaut, playerRef }: { c
     connectionManager.on('game_event', receive)
     return () => { connectionManager.off('game_event', receive); clearTimeout(first); clearTimeout(retry) }
   }, [connectionManager])
-  useEffect(() => {
-    const down = (event: PointerEvent) => { if (event.pointerType === 'mouse' && event.button === 0) mouse.current = true }
-    const stop = () => { mouse.current = false }
-    gl.domElement.addEventListener('pointerdown', down)
-    window.addEventListener('pointerup', stop); window.addEventListener('blur', stop); document.addEventListener('visibilitychange', stop)
-    return () => { gl.domElement.removeEventListener('pointerdown', down); window.removeEventListener('pointerup', stop); window.removeEventListener('blur', stop); document.removeEventListener('visibilitychange', stop) }
-  }, [gl])
-  useEffect(() => { mouse.current = false }, [astronaut])
+  useEffect(() => bindAdventureMouseFire(gl.domElement, input), [gl, input])
+  useEffect(() => { input.reset() }, [astronaut, input])
   useFrame(() => {
     const now = performance.now(), player = window.__localPlayerPosition
-    const shooting = astronaut && player && Date.now() > adventureCombatState.deadUntil && document.visibilityState === 'visible' && (mouse.current || (getActiveGamepad()?.buttons[7]?.value || 0) > .1)
+    const enabled = astronaut && !!player && Date.now() > adventureCombatState.deadUntil
+      && Date.now() > sharkPlayerState.caughtUntil && document.visibilityState === 'visible'
+    const trigger = (getActiveGamepad()?.buttons[7]?.value || 0) > .1
+    const shooting = enabled && input.active(trigger)
     if (shooting) {
       camera.getWorldDirection(work.direction).normalize()
       adventureCombatState.aimingUntil = Date.now() + 300
       adventureCombatState.aimHeading = Math.atan2(work.direction.x, work.direction.z) - Math.PI
-      if (!wasShooting.current) lastFire.current = now - INTERVAL + 50
     }
-    wasShooting.current = !!shooting
-    if (shooting && now - lastFire.current >= INTERVAL) {
-      lastFire.current = now
+    if (input.consume(now, enabled, trigger) && player) {
       camera.getWorldDirection(work.direction).normalize()
       camera.getWorldPosition(work.aim)
       work.ray.set(work.aim, work.direction)
       let aimDistance = RANGE + work.aim.distanceTo(player)
       const cameraSolid = world.castRay(new rapier.Ray(work.aim, work.direction), aimDistance, true, rapier.QueryFilterFlags.EXCLUDE_SENSORS, undefined, undefined, playerRef.current?.rigidBody, collider => !!collider.parent()?.isFixed())
-      if (cameraSolid) aimDistance = cameraSolid.timeOfImpact
+      aimDistance = adventureSolidDistance(cameraSolid, aimDistance)
       for (const object of adventureDestructibles.values()) {
         const p = object.position(); if (!p) continue
         work.sphere.set(p, object.radius)
@@ -100,7 +96,7 @@ export function AdventureCombat({ connectionManager, astronaut, playerRef }: { c
       let distance = RANGE, target: string | undefined, objectId: string | undefined
       const solid = world.castRay(new rapier.Ray(work.origin, work.direction), RANGE, true, rapier.QueryFilterFlags.EXCLUDE_SENSORS, undefined, undefined, playerRef.current?.rigidBody, collider => !!collider.parent()?.isFixed())
       if (solid) {
-        distance = solid.timeOfImpact
+        distance = adventureSolidDistance(solid, RANGE)
         const id = (solid.collider.parent()?.userData as any)?.adventureDestructibleId
         if (typeof id === 'string' && adventureDestructibles.has(id)) objectId = id
       }
