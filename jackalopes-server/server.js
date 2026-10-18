@@ -24,10 +24,9 @@ const sessionDeletionTimers = new Map(); // Grace period timers for empty sessio
 let clientIdCounter = 1;
 
 // Grace period before deleting empty sessions (ms)
-const SESSION_DELETION_GRACE_PERIOD = 10000;
-const PLAYER_INACTIVE_TIMEOUT = 15000;
-const INACTIVE_SWEEP_INTERVAL = 5000;
-const ROUND_RESET_INACTIVE_TIMEOUT = 8000;
+// Extended to 5 minutes to allow for page reloads and reconnections
+const SESSION_DELETION_GRACE_PERIOD = 300000;
+const MAX_WEBSOCKET_MESSAGE_SIZE = 1024 * 1024;
 
 // Create an HTTP server for WebSocket handshake
 const server = http.createServer((req, res) => {
@@ -49,67 +48,6 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running at http://0.0.0.0:${PORT}/`);
     logMessage(`Server running on port ${PORT}`);
 });
-
-setInterval(() => {
-    const now = Date.now();
-
-    for (const [clientId, client] of clients.entries()) {
-        if (!client || !client.sessionId) continue;
-        if (!client.lastSeen) continue;
-
-        const inactiveFor = now - client.lastSeen;
-        if (inactiveFor < PLAYER_INACTIVE_TIMEOUT) continue;
-
-        logMessage(`Client ${clientId} (${client.playerName || 'unknown'}) inactive for ${inactiveFor}ms - removing from lobby/session`);
-
-        const sessionId = client.sessionId;
-        const playerId = client.playerId;
-        const playerName = client.playerName;
-
-        handleLeaveSession(clientId);
-
-        if (client.socket && !client.socket.destroyed) {
-            try {
-                client.socket.destroy();
-            } catch (err) {
-                logMessage(`Error destroying inactive client ${clientId} socket: ${err.message}`);
-            }
-        }
-
-        clients.delete(clientId);
-        logMessage(`Inactive client ${clientId} (${playerName || playerId || 'unknown'}) purged from session ${sessionId}`);
-    }
-}, INACTIVE_SWEEP_INTERVAL);
-
-function purgeInactivePlayersInSession(sessionId, inactiveTimeoutMs, reason = 'inactive cleanup') {
-    const now = Date.now();
-
-    for (const [clientId, client] of clients.entries()) {
-        if (!client || client.sessionId !== sessionId) continue;
-        if (!client.lastSeen) continue;
-
-        const inactiveFor = now - client.lastSeen;
-        if (inactiveFor < inactiveTimeoutMs) continue;
-
-        logMessage(`Client ${clientId} (${client.playerName || 'unknown'}) inactive for ${inactiveFor}ms during ${reason} - removing from lobby/session`);
-
-        const playerId = client.playerId;
-        const playerName = client.playerName;
-
-        handleLeaveSession(clientId);
-
-        if (client.socket && !client.socket.destroyed) {
-            try {
-                client.socket.destroy();
-            } catch (err) {
-                logMessage(`Error destroying ${reason} client ${clientId} socket: ${err.message}`);
-            }
-        }
-
-        clients.delete(clientId);
-        logMessage(`${reason} purged client ${clientId} (${playerName || playerId || 'unknown'}) from session ${sessionId}`);
-    }
-}
 
 // Set up graceful shutdown
 process.on('SIGTERM', shutdownServer);
@@ -147,8 +85,10 @@ function handleWebSocketUpgrade(req, socket, head) {
             sessionId: null,
             playerName: null,
             authenticated: false,
-            lastSeen: Date.now(),
-            receiveBuffer: Buffer.alloc(0)
+            receiveBuffer: Buffer.alloc(0),
+            fragmentedOpcode: null,
+            fragmentChunks: [],
+            fragmentLength: 0
         });
 
         // Handle socket events
@@ -192,42 +132,81 @@ function handleWebSocketData(clientId, buffer) {
         const client = clients.get(clientId);
         if (!client) return;
 
-        const buffered = client.receiveBuffer && client.receiveBuffer.length
-            ? Buffer.concat([client.receiveBuffer, buffer])
-            : buffer;
+        client.receiveBuffer = Buffer.concat([client.receiveBuffer, buffer]);
+        if (client.receiveBuffer.length > MAX_WEBSOCKET_MESSAGE_SIZE) {
+            throw new Error('WebSocket receive buffer exceeded maximum size');
+        }
 
-        const { frames, remaining } = decodeWebSocketFrames(buffered);
+        const { frames, remaining } = decodeWebSocketFrames(client.receiveBuffer);
         client.receiveBuffer = remaining;
 
         for (const frame of frames) {
-            if (frame.opcode === 8) { // Close frame
-                handleDisconnect(clientId);
+            if (frame.opcode === 8) { // Close
+                client.socket.write(encodeWebSocketFrame(frame.payload, 8));
+                client.socket.end();
                 return;
             }
 
-            if (frame.opcode === 1 || frame.opcode === 0) { // Text / continuation frame
-                const isContinuation = frame.opcode === 0;
+            if (frame.opcode === 9) { // Ping
+                client.socket.write(encodeWebSocketFrame(frame.payload, 10));
+                continue;
+            }
 
-                if (!isContinuation) {
-                    client.textFrameBuffer = frame.payload;
-                } else if (client.textFrameBuffer && client.textFrameBuffer.length) {
-                    client.textFrameBuffer = Buffer.concat([client.textFrameBuffer, frame.payload]);
-                } else {
-                    client.textFrameBuffer = frame.payload;
+            if (frame.opcode === 10) { // Pong
+                continue;
+            }
+
+            if (frame.opcode === 0) { // Continuation
+                if (client.fragmentedOpcode === null) {
+                    throw new Error('Unexpected WebSocket continuation frame');
                 }
 
-                if (!frame.fin) {
-                    continue;
+                client.fragmentChunks.push(frame.payload);
+                client.fragmentLength += frame.payload.length;
+                if (client.fragmentLength > MAX_WEBSOCKET_MESSAGE_SIZE) {
+                    throw new Error('Fragmented WebSocket message exceeded maximum size');
                 }
 
-                const completePayload = client.textFrameBuffer || frame.payload;
-                client.textFrameBuffer = null;
-                const message = completePayload.toString('utf8');
+                if (frame.fin) {
+                    const messagePayload = Buffer.concat(client.fragmentChunks, client.fragmentLength);
+                    const messageOpcode = client.fragmentedOpcode;
+                    client.fragmentedOpcode = null;
+                    client.fragmentChunks = [];
+                    client.fragmentLength = 0;
+
+                    if (messageOpcode === 1) {
+                        handleClientMessage(clientId, messagePayload.toString('utf8'));
+                    }
+                }
+                continue;
+            }
+
+            if (frame.opcode === 1 && frame.fin) { // Complete text frame
+                const message = frame.payload.toString('utf8');
                 handleClientMessage(clientId, message);
+                continue;
+            }
+
+            if (frame.opcode === 1) { // First fragment of a text message
+                if (client.fragmentedOpcode !== null) {
+                    throw new Error('Started a new WebSocket message before finishing the previous one');
+                }
+                client.fragmentedOpcode = frame.opcode;
+                client.fragmentChunks = [frame.payload];
+                client.fragmentLength = frame.payload.length;
+                continue;
+            }
+
+            if (frame.opcode === 2) {
+                throw new Error('Binary WebSocket messages are not supported');
             }
         }
     } catch (err) {
         logMessage(`Error processing data from client ${clientId}: ${err.message}`);
+        const client = clients.get(clientId);
+        if (client?.socket && !client.socket.destroyed) {
+            client.socket.destroy();
+        }
     }
 }
 
@@ -238,13 +217,7 @@ function decodeWebSocketFrames(buffer) {
     const frames = [];
     let offset = 0;
 
-    while (offset < buffer.length) {
-        const frameStart = offset;
-
-        if (buffer.length - offset < 2) {
-            break;
-        }
-
+    while (buffer.length - offset >= 2) {
         const firstByte = buffer[offset];
         const secondByte = buffer[offset + 1];
 
@@ -253,62 +226,61 @@ function decodeWebSocketFrames(buffer) {
         const masked = Boolean(secondByte & 0x80);
         let payloadLength = secondByte & 0x7F;
 
-        offset += 2;
+        if (firstByte & 0x70) {
+            throw new Error('Unsupported WebSocket extension bits');
+        }
+        if (!masked) {
+            throw new Error('Client WebSocket frames must be masked');
+        }
+        if (opcode >= 8 && (!fin || payloadLength > 125)) {
+            throw new Error('Invalid WebSocket control frame');
+        }
+
+        let headerLength = 2;
 
         if (payloadLength === 126) {
-            if (buffer.length - offset < 2) {
-                offset = frameStart;
-                break;
-            }
-            payloadLength = buffer.readUInt16BE(offset);
-            offset += 2;
+            if (buffer.length - offset < 4) break;
+            payloadLength = buffer.readUInt16BE(offset + 2);
+            headerLength += 2;
         } else if (payloadLength === 127) {
-            if (buffer.length - offset < 8) {
-                offset = frameStart;
-                break;
+            if (buffer.length - offset < 10) break;
+            const largePayloadLength = buffer.readBigUInt64BE(offset + 2);
+            if (largePayloadLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+                throw new Error('WebSocket frame is too large');
             }
-            // 64-bit length is not fully supported, but this keeps framing correct.
-            payloadLength = buffer.readUInt32BE(offset + 4);
-            offset += 8;
+            payloadLength = Number(largePayloadLength);
+            headerLength += 8;
         }
 
-        let maskingKey;
-        if (masked) {
-            if (buffer.length - offset < 4) {
-                offset = frameStart;
-                break;
-            }
-            maskingKey = buffer.slice(offset, offset + 4);
-            offset += 4;
+        if (payloadLength > MAX_WEBSOCKET_MESSAGE_SIZE) {
+            throw new Error('WebSocket frame exceeded maximum size');
         }
 
-        if (buffer.length - offset < payloadLength) {
-            offset = frameStart;
-            break;
-        }
+        headerLength += 4;
+        const frameLength = headerLength + payloadLength;
+        if (buffer.length - offset < frameLength) break;
 
-        const payload = Buffer.from(buffer.slice(offset, offset + payloadLength));
+        const maskingKeyOffset = offset + headerLength - 4;
+        const maskingKey = buffer.subarray(maskingKeyOffset, maskingKeyOffset + 4);
+        const payloadStart = offset + headerLength;
+        const payload = Buffer.from(buffer.subarray(payloadStart, payloadStart + payloadLength));
 
-        if (masked) {
-            for (let i = 0; i < payload.length; i++) {
-                payload[i] = payload[i] ^ maskingKey[i % 4];
-            }
+        for (let i = 0; i < payload.length; i++) {
+            payload[i] ^= maskingKey[i % 4];
         }
 
         frames.push({
             fin,
             opcode,
-            masked,
-            payloadLength,
             payload
         });
 
-        offset += payloadLength;
+        offset += frameLength;
     }
 
     return {
         frames,
-        remaining: buffer.slice(offset)
+        remaining: Buffer.from(buffer.subarray(offset))
     };
 }
 
@@ -339,13 +311,17 @@ function handleClientMessage(clientId, message) {
                 handlePlayerUpdate(clientId, data);
                 break;
 
-            case 'request_player_list':
-                handleRequestPlayerList(clientId);
+            case 'request_player_list': {
+                const client = clients.get(clientId);
+                const session = client && sessions.get(client.sessionId);
+                if (client?.authenticated && session) {
+                    sendToClient(clientId, {
+                        type: 'player_list',
+                        players: getSessionPlayers(session, client.playerId)
+                    });
+                }
                 break;
-
-            case 'game_snapshot':
-                // Legacy client message; ignore to avoid noisy unsupported-message churn.
-                break;
+            }
                 
             case 'game_event':
                 handleGameEvent(clientId, data);
@@ -399,50 +375,59 @@ function handleAuth(clientId, data) {
     const playerName = data.playerName.replace(/[^\w\s]/g, '');
     const persistentId = data.persistentId;
 
-    // Graceful reconnection: if this persistentId already has a connection, swap sockets
+    // Graceful reconnection: only swap if old socket is actually dead
+    // This prevents localStorage-shared persistentIds from kicking each other out
     if (persistentId && persistentIdMap.has(persistentId)) {
         const oldClientId = persistentIdMap.get(persistentId);
         const oldClient = clients.get(oldClientId);
 
         if (oldClient && oldClientId !== clientId) {
-            logMessage(`Reconnection detected for persistentId ${persistentId}: swapping client ${oldClientId} -> ${clientId}`);
+            // Check if old socket is actually dead/disconnected
+            const oldSocketDead = !oldClient.socket || oldClient.socket.destroyed;
 
-            // Transfer session membership to new client
-            client.sessionId = oldClient.sessionId;
-            client.playerName = oldClient.playerName || playerName;
-            client.authenticated = true;
-            client.playerId = oldClient.playerId;
-            client.persistentId = persistentId;
+            if (oldSocketDead) {
+                // Old socket is dead - this is a true reconnection, swap sockets
+                logMessage(`Reconnection detected for persistentId ${persistentId}: swapping client ${oldClientId} -> ${clientId}`);
 
-            // Update session's player map to point to new clientId
-            if (oldClient.sessionId) {
-                const session = sessions.get(oldClient.sessionId);
-                if (session && session.players.has(oldClient.playerId)) {
-                    session.players.set(oldClient.playerId, clientId);
-                    logMessage(`Session ${oldClient.sessionId}: swapped clientId for player ${oldClient.playerId}`);
+                // Transfer session membership to new client
+                client.sessionId = oldClient.sessionId;
+                client.playerName = oldClient.playerName || playerName;
+                client.authenticated = true;
+                client.playerId = oldClient.playerId;
+                client.persistentId = persistentId;
+
+                // Update session's player map to point to new clientId
+                if (oldClient.sessionId) {
+                    const session = sessions.get(oldClient.sessionId);
+                    if (session && session.players.has(oldClient.playerId)) {
+                        session.players.set(oldClient.playerId, clientId);
+                        logMessage(`Session ${oldClient.sessionId}: swapped clientId for player ${oldClient.playerId}`);
+                    }
                 }
+
+                clients.delete(oldClientId);
+
+                // Update persistentId map
+                persistentIdMap.set(persistentId, clientId);
+
+                // Send auth_success with existing playerId
+                sendToClient(clientId, {
+                    type: 'auth_success',
+                    player: {
+                        id: client.playerId,
+                        name: client.playerName
+                    }
+                });
+
+                logMessage(`Client ${clientId} reconnected as ${client.playerName} (swap from ${oldClientId})`);
+                return;
+            } else {
+                // Old socket is still alive - this is a DIFFERENT player with same persistentId
+                // (e.g., two browser windows sharing localStorage)
+                // Treat as a new player, don't overwrite the persistentId mapping
+                logMessage(`New connection with existing persistentId ${persistentId} but old socket still alive - treating as new player`);
+                // Fall through to normal auth flow below
             }
-
-            // Close the old socket without triggering player_left
-            if (oldClient.socket && !oldClient.socket.destroyed) {
-                oldClient.socket.destroy();
-            }
-            clients.delete(oldClientId);
-
-            // Update persistentId map
-            persistentIdMap.set(persistentId, clientId);
-
-            // Send auth_success with existing playerId
-            sendToClient(clientId, {
-                type: 'auth_success',
-                player: {
-                    id: client.playerId,
-                    name: client.playerName
-                }
-            });
-
-            logMessage(`Client ${clientId} reconnected as ${client.playerName} (swap from ${oldClientId})`);
-            return;
         }
     }
 
@@ -490,17 +475,22 @@ function handleJoinSession(clientId, data) {
     
     if (data.sessionKey) {
         sessionKey = data.sessionKey;
-        
+
+        // Log session search
+        logMessage(`Client ${clientId} looking for session with key: "${sessionKey}"`);
+        logMessage(`Current sessions: ${Array.from(sessions.entries()).map(([id, s]) => `${id}="${s.key}"`).join(', ') || 'none'}`);
+
         // Find session with this key
         let found = false;
         for (const [id, session] of sessions.entries()) {
-            if (session.key === sessionKey) {
+            if (session.key === sessionKey && session.gameMode === gameMode) {
                 sessionId = id;
                 found = true;
+                logMessage(`Found existing session ${sessionId} with key "${sessionKey}" (${session.players.size} players)`);
                 break;
             }
         }
-        
+
         if (!found) {
             // Create new session with the provided key
             sessionId = 'session_' + Math.random().toString(36).substr(2, 9);
@@ -512,6 +502,7 @@ function handleJoinSession(clientId, data) {
                 matchStartTime: Date.now(),
                 matchDuration: 300,
             });
+            logMessage(`Created NEW session ${sessionId} with key "${sessionKey}"`);
         }
     } else {
         // Create a new session with a random key
@@ -530,6 +521,12 @@ function handleJoinSession(clientId, data) {
     
     const session = sessions.get(sessionId);
 
+    // A client can belong to only one lobby, including when switching modes.
+    if (client.sessionId && client.sessionId !== sessionId) {
+        handleLeaveSession(clientId);
+        client.lastState = null;
+    }
+
     if (!session.matchStartTime) {
         session.matchStartTime = Date.now();
     }
@@ -542,6 +539,48 @@ function handleJoinSession(clientId, data) {
         clearTimeout(sessionDeletionTimers.get(sessionId));
         sessionDeletionTimers.delete(sessionId);
         logMessage(`Session ${sessionId} deletion cancelled - player rejoining`);
+    }
+
+    // CRITICAL: Clean up any ghost players from the same persistentId in this session
+    // This handles cases where React StrictMode or page reloads create duplicate connections
+    // BUT only remove if the old socket is actually dead - don't kill live connections
+    if (client.persistentId) {
+        const ghostsToRemove = [];
+        for (const [playerId, otherClientId] of session.players.entries()) {
+            if (otherClientId === clientId) continue; // Skip ourselves
+            const otherClient = clients.get(otherClientId);
+            if (otherClient && otherClient.persistentId === client.persistentId) {
+                // Only treat as ghost if socket is actually dead
+                const socketDead = !otherClient.socket || otherClient.socket.destroyed;
+                if (socketDead) {
+                    ghostsToRemove.push({ playerId, clientId: otherClientId, client: otherClient });
+                } else {
+                    logMessage(`Same persistentId but socket still alive - allowing both connections (client ${otherClientId} and ${clientId})`);
+                }
+            }
+        }
+
+        // Remove ghost players and notify others
+        for (const ghost of ghostsToRemove) {
+            logMessage(`Removing ghost player ${ghost.playerId} (client ${ghost.clientId}) with same persistentId as joining client ${clientId}`);
+            session.players.delete(ghost.playerId);
+
+            // Notify other players about the removal
+            for (const [otherId, otherClientId] of session.players.entries()) {
+                sendToClient(otherClientId, {
+                    type: 'player_left',
+                    id: ghost.playerId,
+                    player: ghost.playerId,
+                    playerName: ghost.client.playerName
+                });
+            }
+
+            // Close the ghost's socket if still open
+            if (ghost.client.socket && !ghost.client.socket.destroyed) {
+                ghost.client.socket.destroy();
+            }
+            clients.delete(ghost.clientId);
+        }
     }
 
     client.gameMode = gameMode;
@@ -585,29 +624,11 @@ function handleJoinSession(clientId, data) {
     // Add player to session
     session.players.set(client.playerId, clientId);
     client.sessionId = sessionId;
-
-    const existingPlayers = {};
-    for (const [otherId, otherClientId] of session.players.entries()) {
-        if (otherId === client.playerId) continue;
-
-        const otherClient = clients.get(otherClientId);
-        const otherState = otherClient?.lastState || {};
-
-        existingPlayers[otherId] = {
-            position: otherState.position || [0, 1, 0],
-            rotation: otherState.rotation || [0, 0, 0, 1],
-            health: 100,
-            playerType: otherClient?.playerType || 'merc',
-            flashlightOn: !!otherState.flashlightOn,
-            cameraPitch: otherState.cameraPitch || 0,
-            droneActive: !!otherState.droneActive,
-            dronePosition: otherState.dronePosition,
-            droneRotation: otherState.droneRotation,
-            droneThermalActive: !!otherState.droneThermalActive,
-        };
-    }
     
-    // Notify client
+    // Include authoritative state so late joiners see stationary players too.
+    const existingPlayers = getSessionPlayers(session, client.playerId);
+
+    // Notify client of successful join
     sendToClient(clientId, {
         type: 'join_success',
         session: {
@@ -618,16 +639,31 @@ function handleJoinSession(clientId, data) {
             id: client.playerId,
             name: client.playerName
         },
-        players: existingPlayers,
         playerType: client.playerType,
+        players: existingPlayers,
         gameMode,
         flashlightPickup: session.flashlightPickup,
         matchStartTime: session.matchStartTime,
         matchDuration: session.matchDuration,
         serverTime: Date.now(),
     });
-    
-    // Notify other players in session
+
+    // CRITICAL: Send joining player info about all existing players in session
+    // This is what allows them to see other players who joined before them
+    for (const existingPlayer of Object.values(existingPlayers)) {
+        logMessage(`Sending player_joined for existing player ${existingPlayer.id} to new client ${clientId}`);
+        sendToClient(clientId, {
+            type: 'player_joined',
+            player: {
+                id: existingPlayer.id,
+                name: existingPlayer.name
+            },
+            playerType: existingPlayer.playerType,
+            initialState: existingPlayer
+        });
+    }
+
+    // Notify other players in session about the new player
     for (const [otherId, otherClientId] of session.players.entries()) {
         if (otherId !== client.playerId) {
             sendToClient(otherClientId, {
@@ -637,17 +673,35 @@ function handleJoinSession(clientId, data) {
                     name: client.playerName
                 },
                 playerType: client.playerType,
-                initialState: client.lastState || {
-                    position: [0, 1, 0],
-                    rotation: [0, 0, 0, 1],
-                    health: 100,
-                    playerType: client.playerType,
-                }
+                initialState: getPlayerState(client)
             });
         }
     }
-    
-    logMessage(`Client ${clientId} (${client.playerName}) joined session ${sessionId}`);
+
+    logMessage(`Client ${clientId} (${client.playerName}) joined session ${sessionId} with ${Object.keys(existingPlayers).length} existing players`);
+}
+
+function getPlayerState(client) {
+    return {
+        position: [0, 1, 0],
+        rotation: [0, 0, 0, 1],
+        health: 100,
+        flashlightOn: false,
+        ...client.lastState,
+        id: client.playerId,
+        name: client.playerName,
+        playerType: client.playerType
+    };
+}
+
+function getSessionPlayers(session, excludedPlayerId) {
+    const players = {};
+    for (const [playerId, clientId] of session.players) {
+        const client = clients.get(clientId);
+        if (playerId === excludedPlayerId || !client || client.socket.destroyed) continue;
+        players[playerId] = getPlayerState(client);
+    }
+    return players;
 }
 
 /**
@@ -660,8 +714,6 @@ function handlePlayerUpdate(clientId, data) {
         return;
     }
     
-    client.lastSeen = Date.now();
-
     if (!data.state) {
         sendToClient(clientId, {
             type: 'error',
@@ -669,64 +721,26 @@ function handlePlayerUpdate(clientId, data) {
         });
         return;
     }
-
-    client.lastState = data.state;
     
     const session = sessions.get(client.sessionId);
     if (!session) return;
+
+    // Retain the latest state for joins and explicit roster recovery requests.
+    client.lastState = { ...client.lastState, ...data.state, playerType: client.playerType };
     
     // Broadcast to other players in session
     for (const [otherId, otherClientId] of session.players.entries()) {
         if (otherId !== client.playerId) {
             sendToClient(otherClientId, {
                 type: 'player_update',
-                player: client.playerId,
+                id: client.playerId,  // Client expects 'id' not 'player'
+                position: data.state?.position,
+                rotation: data.state?.rotation,
                 state: data.state,
                 timestamp: Date.now()
             });
         }
     }
-}
-
-function handleRequestPlayerList(clientId) {
-    const client = clients.get(clientId);
-
-    if (!client || !client.authenticated || !client.sessionId) {
-        return;
-    }
-
-    const session = sessions.get(client.sessionId);
-    if (!session) return;
-
-    const players = {};
-
-    for (const [playerId, playerClientId] of session.players.entries()) {
-        const sessionClient = clients.get(playerClientId);
-        const state = sessionClient?.lastState || {};
-
-        players[playerId] = {
-            position: state.position || [0, 1, 0],
-            rotation: state.rotation || [0, 0, 0, 1],
-            health: 100,
-            playerType: sessionClient?.playerType || 'merc',
-            flashlightOn: !!state.flashlightOn,
-            cameraPitch: state.cameraPitch || 0,
-            droneActive: !!state.droneActive,
-            dronePosition: state.dronePosition,
-            droneRotation: state.droneRotation,
-            droneThermalActive: !!state.droneThermalActive,
-        };
-    }
-
-    sendToClient(clientId, {
-        type: 'player_list',
-        players,
-        session: {
-            id: client.sessionId,
-            key: session.key,
-        },
-        serverTime: Date.now(),
-    });
 }
 
 /**
@@ -750,8 +764,6 @@ function handleGameEvent(clientId, data) {
     const session = sessions.get(client.sessionId);
     if (!session) return;
     
-    client.lastSeen = Date.now();
-
     // Add player and timestamp information
     const event = data.event;
     event.player = client.playerId;
@@ -771,10 +783,8 @@ function handleGameEvent(clientId, data) {
                 serverTime: Date.now(),
             });
         }
-
-        purgeInactivePlayersInSession(client.sessionId, ROUND_RESET_INACTIVE_TIMEOUT, 'round reset cleanup');
     }
-    
+
     // Broadcast to all players in session (including sender)
     for (const [_, otherClientId] of session.players.entries()) {
         sendToClient(otherClientId, {
@@ -800,14 +810,13 @@ function handleChat(clientId, data) {
     
     const session = sessions.get(client.sessionId);
     if (!session) return;
-    
+
     const chatId = data.id || `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const requestedScope = data.scope === 'team' || data.scope === 'proxy' || data.scope === 'all'
         ? data.scope
         : 'all';
     const playerType = client.playerType || data.playerType || 'merc';
     
-    // Sanitize message
     const message = data.message.replace(/[^\w\s.!?,:'"()\-]/g, '');
 
     const recipients = [];
@@ -850,9 +859,6 @@ function handleChat(clientId, data) {
     }
 }
 
-/**
- * Handle session leave requests
- */
 function handleFlashlightPickup(clientId, data) {
     const client = clients.get(clientId);
 
@@ -922,6 +928,9 @@ function handleVoiceSignal(clientId, data) {
     }
 }
 
+/**
+ * Handle session leave requests
+ */
 function handleLeaveSession(clientId) {
     const client = clients.get(clientId);
     
@@ -942,6 +951,7 @@ function handleLeaveSession(clientId) {
     for (const [_, otherClientId] of session.players.entries()) {
         sendToClient(otherClientId, {
             type: 'player_left',
+            id: client.playerId,
             player: client.playerId,
             playerName: client.playerName
         });
@@ -1021,8 +1031,8 @@ function sendToClient(clientId, message) {
 /**
  * Encode a message as a WebSocket frame
  */
-function encodeWebSocketFrame(message) {
-    const payload = Buffer.from(message);
+function encodeWebSocketFrame(message, opcode = 1) {
+    const payload = Buffer.isBuffer(message) ? message : Buffer.from(message);
     const payloadLength = payload.length;
     
     let header;
@@ -1046,8 +1056,8 @@ function encodeWebSocketFrame(message) {
         headerSize = 10;
     }
     
-    // Set the first byte: FIN bit and opcode for text frame
-    header[0] = 0x81;
+    // Set the first byte: FIN bit and frame opcode
+    header[0] = 0x80 | opcode;
     
     // Create the final buffer
     const frame = Buffer.alloc(headerSize + payloadLength);
