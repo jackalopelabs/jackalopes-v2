@@ -6,7 +6,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import type { TerrainLevelDocument } from './terrain/level-document'
 import { lifeguardMotion } from './cave-lifeguard'
 import { adventureCombatState } from './adventure-combat-state'
-import { isAdventureObjectDestroyed, registerAdventureDestructible } from './adventure-destructibles'
+import { isAdventureObjectDestroyed, registerAdventureDestructible, refreshAdventureDestructions } from './adventure-destructibles'
 import { SHARK_BITE_EVENT, SHARK_SPEED, createSharkBiteGate, createSharkPeer, sharkPlayerState, type Shark, type SharkSwimmer } from './water-sharks'
 
 type Network = { sendMessage(message: unknown): unknown; on(event: string, fn: (event: unknown) => void): unknown;
@@ -58,6 +58,7 @@ export function WaterSharks({ level, network, sample, onBite }: Props) {
   const peer = useMemo(() => createSharkPeer(level, `shark-${Date.now()}-${Math.random().toString(36).slice(2)}`, event => {
     if (manager.current?.isReadyToSend?.() !== false) manager.current?.sendMessage({ type: 'game_event', event })
   }), [level])
+  const homes = useMemo(() => peer.sharks.map(s => ({ ...s })), [peer])
   const displayed = useMemo(() => peer.sharks.map(s => ({ ...s })), [peer])
   const biteGate = useMemo(createSharkBiteGate, [peer])
   const geometry = useMemo(sharkGeometry, [])
@@ -72,10 +73,16 @@ export function WaterSharks({ level, network, sample, onBite }: Props) {
   const lastFrame = useRef(0)
   const sampleRef = useRef(sample); sampleRef.current = sample
   useEffect(() => {
+    const respawn = (i: number) => {
+      Object.assign(displayed[i], homes[i], { dead: false })
+      Object.assign(peer.sharks[i], homes[i], { dead: false, returnUntil: performance.now() / 1000 + 3 })
+      deaths.current[i] = 0; chomps.current[i] = 0
+    }
     const unregister = displayed.map((shown, i) => {
       const id = `water-shark-${shown.id}`, point = new THREE.Vector3()
       return registerAdventureDestructible(id, {
         radius: 1.65,
+        respawn: () => respawn(i),
         position: () => shown.dead || isAdventureObjectDestroyed(id) || !lastFrame.current
           ? null : point.set(shown.x, shown.y, shown.z),
         destroy: () => {
@@ -91,11 +98,11 @@ export function WaterSharks({ level, network, sample, onBite }: Props) {
     })
     const reset = () => {
       deaths.current = []
-      for (let i = 0; i < displayed.length; i++) { displayed[i].dead = false; peer.sharks[i].dead = false }
+      displayed.forEach((_, i) => respawn(i))
     }
     window.addEventListener('jackalopesRoundReset', reset)
     return () => { unregister.forEach(remove => remove()); window.removeEventListener('jackalopesRoundReset', reset) }
-  }, [displayed, peer])
+  }, [displayed, peer, homes])
   useEffect(() => {
     material.onBeforeCompile = shader => {
       shader.uniforms.sharkTime = time
@@ -143,6 +150,7 @@ export function WaterSharks({ level, network, sample, onBite }: Props) {
       swimming: lifeguardMotion.swimming, riding: lifeguardMotion.riding,
       immune: Date.now() < sharkPlayerState.immuneUntil || Date.now() < adventureCombatState.immuneUntil,
     }
+    refreshAdventureDestructions()
     peer.step(source, now, paused ? 0 : delta, visible)
     time.value = now / 1000
     const dt = Math.min(.05, Math.max(0, delta))

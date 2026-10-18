@@ -126,8 +126,8 @@ export function createSharkBiteGate() {
   }
 }
 
-// A different flock layout must not elect a simulator from an older cached game.
-export const SHARK_EVENTS = { peer: 'water_sharks_v2_peer', state: 'water_sharks_v2_state', chomp: 'water_sharks_v2_chomp' } as const
+// Cached clients that keep killed sharks dead forever must not own the respawning flock.
+export const SHARK_EVENTS = { peer: 'water_sharks_v3_peer', state: 'water_sharks_v3_state', chomp: 'water_sharks_v3_chomp' } as const
 type Presence = { event_type: typeof SHARK_EVENTS.peer; actor: string; sequence: number; swimmer: SharkSwimmer }
 type Snapshot = { event_type: typeof SHARK_EVENTS.state; actor: string; sequence: number; sharks: (SharkPoint & { heading: number })[] }
 type Chomp = { event_type: typeof SHARK_EVENTS.chomp; actor: string; sequence: number; shark: number }

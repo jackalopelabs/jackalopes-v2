@@ -4,14 +4,14 @@ import { useRapier } from '@react-three/rapier'
 import * as THREE from 'three'
 import { ConnectionManager } from '../network/ConnectionManager'
 import { getActiveGamepad } from '../common/hooks/use-gamepad'
-import { adventureDestructibles, destroyAdventureObject, getDestroyedAdventureObjectIds, applyDestroyedAdventureObjectIds } from './adventure-destructibles'
+import { adventureDestructibles, destroyAdventureObject, getAdventureDestructionState, applyDestroyedAdventureObjectIds, applyAdventureSharkDeaths } from './adventure-destructibles'
 import { adventureCombatState } from './adventure-combat-state'
 import { adventureSolidDistance, bindAdventureMouseFire, createAdventureFireInput } from './adventure-fire'
 import { sharkPlayerState } from './water-sharks'
 
 const RANGE = 24, PARTICLES = 128
 const validVector = (v: unknown): v is [number, number, number] => Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) < 2000)
-type Shot = { event_type: 'adventure_fire'; shotId: string; player?: string; origin: [number, number, number]; direction: [number, number, number]; distance: number; target?: string; objectId?: string }
+type Shot = { event_type: 'adventure_fire'; timestamp?: number; shotId: string; player?: string; origin: [number, number, number]; direction: [number, number, number]; distance: number; target?: string; objectId?: string }
 
 /** Short hitscan bursts plus a fixed visual pool: no projectile bodies or extra lights. */
 export function AdventureCombat({ connectionManager, astronaut, playerRef }: { connectionManager: ConnectionManager; astronaut: boolean; playerRef: React.RefObject<any> }) {
@@ -32,15 +32,18 @@ export function AdventureCombat({ connectionManager, astronaut, playerRef }: { c
     direction.normalize()
     bursts.current.push({ at: performance.now(), origin: new THREE.Vector3(...event.origin), direction, distance: Math.max(.1, Math.min(RANGE, Number(event.distance) || RANGE)) })
     if (bursts.current.length > 8) bursts.current.shift()
-    if (event.objectId && typeof event.objectId === 'string') destroyAdventureObject(event.objectId)
+    if (event.objectId && typeof event.objectId === 'string') destroyAdventureObject(event.objectId, event.timestamp)
     if (event.target && typeof event.target === 'string') window.dispatchEvent(new CustomEvent('jackalopes:adventure-hit', { detail: { playerId: event.target, shotId: event.shotId } }))
   }
   const processRef = useRef(process); processRef.current = process
   useEffect(() => {
     const receive = (event: any) => {
       if (event?.event_type === 'adventure_world_request' && event.player !== connectionManager.getPlayerId()) {
-        connectionManager.sendMessage({ type: 'game_event', event: { event_type: 'adventure_world_state', target: event.player, ids: getDestroyedAdventureObjectIds() } })
-      } else if (event?.event_type === 'adventure_world_state' && event.target === connectionManager.getPlayerId()) applyDestroyedAdventureObjectIds(event.ids)
+        connectionManager.sendMessage({ type: 'game_event', event: { event_type: 'adventure_world_state', target: event.player, ...getAdventureDestructionState() } })
+      } else if (event?.event_type === 'adventure_world_state' && event.target === connectionManager.getPlayerId()) {
+        applyDestroyedAdventureObjectIds(event.ids)
+        applyAdventureSharkDeaths(event.sharkDeaths)
+      }
       else processRef.current(event)
     }
     const request = () => connectionManager.sendMessage({ type: 'game_event', event: { event_type: 'adventure_world_request' } })

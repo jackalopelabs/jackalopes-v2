@@ -6,7 +6,7 @@ import * as THREE from 'three'
 globalThis.window = new EventTarget()
 const result = await build({ stdin: { contents: `export * from './src/game/adventure-fire';export * from './src/game/adventure-destructibles';export * from './src/game/water-sharks';export * from './src/game/terrain/level-document'`, resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', write: false })
 const { adventureSolidDistance, canStartAdventureMouseFire, createAdventureFireInput, bindAdventureMouseFire, registerAdventureDestructible,
-  destroyAdventureObject, getDestroyedAdventureObjectIds, applyDestroyedAdventureObjectIds,
+  destroyAdventureObject, getDestroyedAdventureObjectIds, applyAdventureSharkDeaths,
   createSharks, stepSharks, sharkCanChase, createSharkBiteGate, createTerrainLevel } = await import('data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'))
 const reset = () => window.dispatchEvent(new Event('jackalopesRoundReset'))
 
@@ -84,11 +84,11 @@ test('one valid astronaut hit destroys each registered shark once and is include
   }
 })
 test('a late join or remount receives the shark death before model registration, with invalid IDs rejected', () => {
-  reset(); applyDestroyedAdventureObjectIds(['water-shark-2', 'water-shark-6', 'water-shark--1', 'anything'])
+  reset(); applyAdventureSharkDeaths(['water-shark-2', 'water-shark-6', 'water-shark--1', 'anything'].map(id => ({ id, killedAt: Date.now() })))
   let calls = 0
   const unregister = registerAdventureDestructible('water-shark-2', { radius: 1.65, position: () => new THREE.Vector3(), destroy: () => calls++ })
   assert.equal(calls, 1)
-  applyDestroyedAdventureObjectIds(['water-shark-2']); assert.equal(calls, 1)
+  applyAdventureSharkDeaths([{id:'water-shark-2',killedAt:Date.now()}]); assert.equal(calls, 1)
   assert.deepEqual(getDestroyedAdventureObjectIds(), ['water-shark-2'])
   unregister(); reset(); assert.deepEqual(getDestroyedAdventureObjectIds(), [])
 })
