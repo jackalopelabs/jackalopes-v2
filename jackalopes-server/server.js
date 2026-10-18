@@ -13,6 +13,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const net = require('net');
+const bedtime = require('./bedtime.cjs').createBedtime();
 
 // Get port from environment variable or use default
 const PORT = process.env.SERVER_PORT || 8082;
@@ -29,7 +30,8 @@ const SESSION_DELETION_GRACE_PERIOD = 300000;
 const MAX_WEBSOCKET_MESSAGE_SIZE = 1024 * 1024;
 
 // Create an HTTP server for WebSocket handshake
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
+    if (await bedtime.handleHttp(req, res)) return;
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Jackalopes WebSocket Server');
 });
@@ -85,6 +87,8 @@ function handleWebSocketUpgrade(req, socket, head) {
             sessionId: null,
             playerName: null,
             authenticated: false,
+            userAgent: req.headers['user-agent'] || '',
+            deviceId: null,
             receiveBuffer: Buffer.alloc(0),
             fragmentedOpcode: null,
             fragmentChunks: [],
@@ -296,6 +300,7 @@ function handleClientMessage(clientId, message) {
             return;
         }
         
+        if (data.type !== 'auth' && enforceBedtime(clientId)) return;
         logMessage(`Received ${data.type} from client ${clientId}`);
         
         switch (data.type) {
@@ -355,6 +360,21 @@ function handleClientMessage(clientId, message) {
     }
 }
 
+function enforceBedtime(clientId) {
+    const client = clients.get(clientId);
+    if (!client?.deviceId) return false;
+    const status = bedtime.status(client.deviceId);
+    if (!status.locked) return false;
+    sendToClient(clientId, { type: 'bedtime', ...status });
+    if (client.sessionId) handleLeaveSession(clientId);
+    client.authenticated = false;
+    client.socket.end(encodeWebSocketFrame(Buffer.from([0x0f, 0xa1]), 8));
+    return true;
+}
+setInterval(() => {
+    for (const clientId of clients.keys()) enforceBedtime(clientId);
+}, 1000).unref();
+
 // Track persistentId -> clientId mapping for graceful reconnection
 const persistentIdMap = new Map();
 
@@ -363,6 +383,14 @@ const persistentIdMap = new Map();
  */
 function handleAuth(clientId, data) {
     const client = clients.get(clientId);
+
+    if (data.deviceId) {
+        try {
+            bedtime.register(data.deviceId, client.userAgent, data);
+            client.deviceId = data.deviceId;
+        } catch (_) { return; }
+    }
+    if (enforceBedtime(clientId)) return;
 
     if (!data.playerName) {
         sendToClient(clientId, {

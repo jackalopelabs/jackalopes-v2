@@ -1,4 +1,5 @@
 import { StrictMode } from 'react';
+import { BedtimeGate, BedtimeParent } from './bedtime/BedtimeGate';
 import { GameErrorBoundary } from './common/components/canvas';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
@@ -10,11 +11,15 @@ const params = new URLSearchParams(window.location.search);
 const terrainEditorActive = params.get('editor') === 'terrain';
 
 async function boot() {
+  if (params.get('bedtime') === 'parent') {
+    createRoot(document.getElementById('root')!).render(<BedtimeParent />);
+    return;
+  }
   await initializeSharedTerrainLevel();
 
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <GameErrorBoundary>{terrainEditorActive ? <TerrainEditor /> : <App />}</GameErrorBoundary>
+      <BedtimeGate><GameErrorBoundary>{terrainEditorActive ? <TerrainEditor /> : <App />}</GameErrorBoundary></BedtimeGate>
     </StrictMode>
   );
 

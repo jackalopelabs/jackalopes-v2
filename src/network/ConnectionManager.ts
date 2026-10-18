@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { getDeviceId, controllerName } from '../bedtime/device';
 import entityStateObserver from './EntityStateObserver';
 import { getGameModeFromUrl, type GameMode } from '../game/game-mode';
 
@@ -1227,6 +1228,10 @@ export class ConnectionManager extends EventEmitter {
         this.handlePlayerUpdate(message);
         break;
 
+      case 'bedtime':
+        window.dispatchEvent(new CustomEvent('jackalopes-bedtime', { detail: message }));
+        break;
+
       case 'match_timer':
         this.log(LogLevel.INFO, '⏱️ match_timer from server:', message);
         this.emit('match_timer', {
@@ -1338,7 +1343,9 @@ export class ConnectionManager extends EventEmitter {
       this.send({
         type: 'auth',
         playerName: playerName,
-        persistentId: persistentId
+        persistentId: persistentId,
+        deviceId: getDeviceId(),
+        controller: controllerName()
       });
       
       // ... continue with existing implementation ...

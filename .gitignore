@@ -31,3 +31,8 @@ level-data/
 # Original large drone downloads are preserved in the Pod source backup
 /public/drone-model.rar
 /public/Model 3D/lenong_3_8k.hdr
+
+# Bedtime runtime secrets/state and isolated browser QA
+/jackalopes-server/.bedtime-parent-key
+/jackalopes-server/bedtime-state.json*
+/bedtime-qa.local.*
