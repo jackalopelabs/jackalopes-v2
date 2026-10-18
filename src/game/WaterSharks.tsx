@@ -139,7 +139,7 @@ export function WaterSharks({ level, network, sample, onBite }: Props) {
     const id = biteGate.tryBite(level, displayed, source, now, peer.fresh(now))
     if (id === null) return
     chomps.current[id] = now + 700; cueUntil.current = now + 2400; setCaught(true)
-    peer.chomp(id)
+    peer.chomp(id, now)
     if (onBite) onBite(id)
     else window.dispatchEvent(new CustomEvent(SHARK_BITE_EVENT, { detail: { shark: id } }))
   })

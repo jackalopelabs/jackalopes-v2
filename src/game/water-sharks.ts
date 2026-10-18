@@ -8,7 +8,7 @@ export const SHARK_BITE_EVENT = 'jackalopes:shark-bite'
 export const sharkPlayerState = { caughtUntil: 0, immuneUntil: 0 }
 export type SharkPoint = { x: number; y: number; z: number }
 export type SharkSwimmer = SharkPoint & { enabled: boolean; swimming: boolean; riding: boolean; immune: boolean }
-export type Shark = SharkPoint & { id: number; heading: number; homeX: number; homeZ: number; kind: 'cave' | 'surface'; target: string | null }
+export type Shark = SharkPoint & { id: number; heading: number; homeX: number; homeZ: number; kind: 'cave' | 'surface'; target: string | null; returnUntil?: number }
 const finitePoint = (p: SharkPoint) => p && [p.x, p.y, p.z].every(Number.isFinite)
 const distance = (a: SharkPoint, b: SharkPoint) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 
@@ -32,11 +32,13 @@ export function createSharks(level: TerrainLevelDocument): Shark[] {
     const water = sharkHabitat(level, x, z, kind)
     if (water) sharks.push({ id: sharks.length, x, y: water.surface - .75, z, heading: 0, homeX: x, homeZ: z, kind, target: null })
   }
-  add(-15, -120, 'cave'); add(19, -132, 'cave')
+  add(-12, -110, 'cave'); add(12, -110, 'cave')
+  add(-12, -132, 'cave'); add(12, -132, 'cave')
   // At most two outdoor sharks, spread across substantial painted swimming water.
   const cell = TERRAIN_SIZE / TERRAIN_SEGMENTS
-  for (let row = 1; row < TERRAIN_SEGMENTS - 1 && sharks.length < 4; row++) {
-    for (let col = 1; col < TERRAIN_SEGMENTS - 1 && sharks.length < 4; col++) {
+  const maximum = sharks.length + 2
+  for (let row = 1; row < TERRAIN_SEGMENTS - 1 && sharks.length < maximum; row++) {
+    for (let col = 1; col < TERRAIN_SEGMENTS - 1 && sharks.length < maximum; col++) {
       const x = (col + .5) * cell - TERRAIN_SIZE / 2, z = (row + .5) * cell - TERRAIN_SIZE / 2
       if (sharks.some(s => s.kind === 'surface' && Math.hypot(s.x - x, s.z - z) < 55)) continue
       add(x, z, 'surface')
@@ -51,6 +53,7 @@ export function sharkCanChase(level: TerrainLevelDocument, shark: Shark, swimmer
     ? caveWaterSurfaceAt(level, swimmer.x, swimmer.y, swimmer.z, true)
     : sampleSwimWater(level, swimmer.x, swimmer.y, swimmer.z, true)
   return water !== null && swimmer.y < water + .25 && distance(shark, swimmer) < 32
+    && Math.hypot(swimmer.x - shark.homeX, swimmer.z - shark.homeZ) < 28
 }
 
 /** Bounded, water-contained steering. All movement, including dives, shares one speed budget. */
@@ -61,6 +64,7 @@ export function stepSharks(level: TerrainLevelDocument, sharks: Shark[], swimmer
     let nearest: SharkSwimmer | undefined, best = Infinity
     shark.target = null
     for (const [actor, swimmer] of swimmers) {
+      if (time < (shark.returnUntil ?? 0)) break
       if (!sharkCanChase(level, shark, swimmer)) continue
       const d = distance(shark, swimmer)
       if (d < best) { nearest = swimmer; best = d; shark.target = actor }
@@ -68,13 +72,15 @@ export function stepSharks(level: TerrainLevelDocument, sharks: Shark[], swimmer
     const angle = time * .19 + shark.id * 2.7
     const water = sharkHabitat(level, shark.x, shark.z, shark.kind)
     if (!water) continue
-    const targetX = nearest?.x ?? shark.homeX + Math.cos(angle) * 8
-    const targetZ = nearest?.z ?? shark.homeZ + Math.sin(angle) * 7
-    const targetY = Math.max(water.bottom + 1, Math.min(water.surface - .65, nearest ? nearest.y - .4 : water.surface - .85))
+    const returning = !nearest && (time < (shark.returnUntil ?? 0)
+      || Math.hypot(shark.x - shark.homeX, shark.z - shark.homeZ) > 9 || shark.y < water.surface - 1.5)
+    const targetX = nearest?.x ?? shark.homeX + (returning ? 0 : Math.cos(angle) * 6)
+    const targetZ = nearest?.z ?? shark.homeZ + (returning ? 0 : Math.sin(angle) * 5)
+    const targetY = Math.max(water.bottom + 1, Math.min(water.surface - .65, nearest ? nearest.y - .4 : water.surface - .75))
     const dx = targetX - shark.x, dy = targetY - shark.y, dz = targetZ - shark.z
     const length = Math.hypot(dx, dy, dz)
     if (length < .01) continue
-    const speed = nearest ? SHARK_SPEED : 2.1
+    const speed = nearest || returning ? SHARK_SPEED : 2.1
     const scale = Math.min(length, speed * dt) / length
     const nx = shark.x + dx * scale, ny = shark.y + dy * scale, nz = shark.z + dz * scale
     const nextWater = sharkHabitat(level, nx, nz, shark.kind)
@@ -87,7 +93,13 @@ export function stepSharks(level: TerrainLevelDocument, sharks: Shark[], swimmer
       if (h < .1) continue
       const amount = Math.min(h, speed * dt) / h
       const bx = shark.x + hx * amount, bz = shark.z + hz * amount
-      if (sharkHabitat(level, bx, bz, shark.kind)) { shark.x = bx; shark.z = bz; shark.heading = Math.atan2(hx, hz) }
+      const backWater = sharkHabitat(level, bx, bz, shark.kind)
+      if (backWater && shark.y > backWater.bottom + .7 && shark.y < backWater.surface - .5) {
+        shark.x = bx; shark.z = bz; shark.heading = Math.atan2(hx, hz)
+      } else {
+        // Rise first if a sloping bed blocks the return; never swim underneath it.
+        shark.y = Math.min(water.surface - .65, shark.y + speed * dt)
+      }
     }
   }
 }
@@ -113,9 +125,11 @@ export function createSharkBiteGate() {
   }
 }
 
-type Presence = { event_type: 'water_sharks_peer'; actor: string; sequence: number; swimmer: SharkSwimmer }
-type Snapshot = { event_type: 'water_sharks_state'; actor: string; sequence: number; sharks: (SharkPoint & { heading: number })[] }
-type Chomp = { event_type: 'water_sharks_chomp'; actor: string; sequence: number; shark: number }
+// A different flock layout must not elect a simulator from an older cached game.
+export const SHARK_EVENTS = { peer: 'water_sharks_v2_peer', state: 'water_sharks_v2_state', chomp: 'water_sharks_v2_chomp' } as const
+type Presence = { event_type: typeof SHARK_EVENTS.peer; actor: string; sequence: number; swimmer: SharkSwimmer }
+type Snapshot = { event_type: typeof SHARK_EVENTS.state; actor: string; sequence: number; sharks: (SharkPoint & { heading: number })[] }
+type Chomp = { event_type: typeof SHARK_EVENTS.chomp; actor: string; sequence: number; shark: number }
 type SharkEvent = Presence | Snapshot | Chomp
 const validActor = (actor: unknown): actor is string => typeof actor === 'string' && actor.length > 0 && actor.length < 100
 
@@ -139,12 +153,12 @@ export function createSharkPeer(level: TerrainLevelDocument, actor: string, send
       if (!validActor(event.actor) || event.actor === actor || !Number.isSafeInteger(event.sequence) || event.sequence < 1) return null
       const key = `${event.actor}:${event.event_type}`
       if (event.sequence <= (receivedSequence.get(key) ?? 0)) return null
-      if (event.event_type === 'water_sharks_peer') {
+      if (event.event_type === SHARK_EVENTS.peer) {
         const p = event.swimmer
         if (!finitePoint(p) || !['enabled', 'swimming', 'riding', 'immune'].every(k => typeof p[k as keyof SharkSwimmer] === 'boolean')) return null
         if (!peers.has(event.actor) && peers.size >= 24) return null
         peers.set(event.actor, { swimmer: { ...p }, at: now, sequence: event.sequence })
-      } else if (event.event_type === 'water_sharks_state') {
+      } else if (event.event_type === SHARK_EVENTS.state) {
         leader = leaderAt(now)
         if (event.actor !== leader || !Array.isArray(event.sharks) || event.sharks.length !== sharks.length) return null
         if (!event.sharks.every((p, i) => {
@@ -154,9 +168,10 @@ export function createSharkPeer(level: TerrainLevelDocument, actor: string, send
         })) return null
         event.sharks.forEach((p, i) => { sharks[i].x = p.x; sharks[i].y = p.y; sharks[i].z = p.z; sharks[i].heading = p.heading! })
         snapshotAt = now
-      } else if (event.event_type === 'water_sharks_chomp') {
+      } else if (event.event_type === SHARK_EVENTS.chomp) {
         if (!peers.has(event.actor) || !Number.isInteger(event.shark) || event.shark < 0 || event.shark >= sharks.length) return null
         receivedSequence.set(key, event.sequence)
+        sharks[event.shark].returnUntil = now / 1000 + 6
         return event.shark
       } else return null
       receivedSequence.set(key, event.sequence)
@@ -168,16 +183,20 @@ export function createSharkPeer(level: TerrainLevelDocument, actor: string, send
       if (!visible) { peers.delete(actor); return }
       peers.set(actor, { swimmer: { ...swimmer }, at: now, sequence })
       leader = leaderAt(now)
-      if (now - announced > 300) { announced = now; send({ event_type: 'water_sharks_peer', actor, sequence: ++sequence, swimmer: { ...swimmer } }) }
+      if (now - announced > 300) { announced = now; send({ event_type: SHARK_EVENTS.peer, actor, sequence: ++sequence, swimmer: { ...swimmer } }) }
       if (leader !== actor) return
       stepSharks(level, sharks, new Map([...peers].filter(([, p]) => now - p.at < 900).map(([id, p]) => [id, p.swimmer])), dt, now / 1000)
       if (now - published > 200) {
         published = now
-        send({ event_type: 'water_sharks_state', actor, sequence: ++sequence,
+        send({ event_type: SHARK_EVENTS.state, actor, sequence: ++sequence,
           sharks: sharks.map(s => ({ x: s.x, y: s.y, z: s.z, heading: s.heading })) })
       }
     },
-    chomp(shark: number) { send({ event_type: 'water_sharks_chomp', actor, sequence: ++sequence, shark }) },
+    chomp(shark: number, now: number) {
+      if (!sharks[shark]) return
+      sharks[shark].returnUntil = now / 1000 + 6
+      send({ event_type: SHARK_EVENTS.chomp, actor, sequence: ++sequence, shark })
+    },
     reset() { peers.clear(); receivedSequence.clear(); announced = published = snapshotAt = -Infinity; leader = actor },
   }
 }

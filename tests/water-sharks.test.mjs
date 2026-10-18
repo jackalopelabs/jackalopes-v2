@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { readFileSync } from 'node:fs'
 import { build } from 'esbuild'
 const result = await build({ stdin: { contents: `export * from './src/game/water-sharks'; export * from './src/game/terrain/swim-speeds';export * from './src/game/adventure-caves';export * from './src/game/terrain/level-document'`, resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', write: false })
-const { SHARK_SPEED, SWIM_SPEED, SWIM_SPRINT_SPEED, createSharks, stepSharks, sharkHabitat, sharkCanChase,
+const { SHARK_SPEED, SHARK_EVENTS, SWIM_SPEED, SWIM_SPRINT_SPEED, createSharks, stepSharks, sharkHabitat, sharkCanChase,
   createSharkBiteGate, createSharkPeer, caveLayout, normalizeTerrainLevel } = await import('data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'))
 const level = normalizeTerrainLevel(JSON.parse(readFileSync(new URL('./fixtures/adventure-valley.json', import.meta.url))))
 const water = caveLayout(level).waterLevel
@@ -16,8 +16,9 @@ test('sharks use a shared swim speed and are slightly slower than sprint, faster
 })
 test('bounded sharks spawn with whole-body water clearance in the actual cave and painted water', () => {
   const sharks = createSharks(level)
-  assert(sharks.length >= 2 && sharks.length <= 4)
-  assert.equal(sharks.filter(s => s.kind === 'cave').length, 2)
+  assert(sharks.length >= 4 && sharks.length <= 6)
+  assert.equal(sharks.filter(s => s.kind === 'cave').length, 4)
+  assert.equal(sharks.filter(s => s.kind === 'cave' && s.z === -110).length, 2)
   for (const shark of sharks) assert(sharkHabitat(level, shark.x, shark.z, shark.kind))
 })
 test('both avatar appearances are eligible; shore, slide, disabled, immune and sky players are safe', () => {
@@ -35,7 +36,8 @@ test('all pursuit displacement, including diving and boundary turns, obeys 6.1 s
     stepSharks(level, sharks, new Map([['p', p]]), .05, i * .05)
     sharks.forEach((s, j) => {
       assert(Math.hypot(s.x - previous[j].x, s.y - previous[j].y, s.z - previous[j].z) <= SHARK_SPEED * .05 + 1e-8)
-      assert(sharkHabitat(level, s.x, s.z, s.kind))
+      const habitat = sharkHabitat(level, s.x, s.z, s.kind)
+      assert(habitat); assert(s.y > habitat.bottom + .7); assert(s.y < habitat.surface - .5)
     })
   }
 })
@@ -89,11 +91,68 @@ test('two peers elect one simulator, converge, reject echoes, and take over afte
 })
 test('malformed/stale snapshots cannot relocate sharks; chomp messages never grant a catch', () => {
   const peer = createSharkPeer(level, 'b', () => {}), before = structuredClone(peer.sharks)
-  peer.receive({ event_type: 'water_sharks_state', actor: 'a', sequence: 1, sharks: [] }, 0)
-  peer.receive({ event_type: 'water_sharks_peer', actor: 'a', sequence: 1, swimmer: swimmer() }, 0)
-  assert.equal(peer.receive({ event_type: 'water_sharks_chomp', actor: 'a', sequence: 2, shark: 0 }, 1), 0)
-  assert.equal(peer.receive({ event_type: 'water_sharks_chomp', actor: 'a', sequence: 2, shark: 0 }, 2), null)
-  peer.receive({ event_type: 'water_sharks_state', actor: 'a', sequence: 3, sharks: before.map(s => ({ ...s, x: NaN })) }, 2)
-  peer.receive({ event_type: 'water_sharks_state', actor: 'a', sequence: 4, sharks: before.map(s => ({ ...s, y: 1000 })) }, 3)
+  peer.receive({ event_type: SHARK_EVENTS.state, actor: 'a', sequence: 1, sharks: [] }, 0)
+  peer.receive({ event_type: SHARK_EVENTS.peer, actor: 'a', sequence: 1, swimmer: swimmer() }, 0)
+  assert.equal(peer.receive({ event_type: SHARK_EVENTS.chomp, actor: 'a', sequence: 2, shark: 0 }, 1), 0)
+  before[0].returnUntil = 6.001
+  assert.equal(peer.receive({ event_type: SHARK_EVENTS.chomp, actor: 'a', sequence: 2, shark: 0 }, 2), null)
+  peer.receive({ event_type: SHARK_EVENTS.state, actor: 'a', sequence: 3, sharks: before.map(s => ({ ...s, x: NaN })) }, 2)
+  peer.receive({ event_type: SHARK_EVENTS.state, actor: 'a', sequence: 4, sharks: before.map(s => ({ ...s, y: 1000 })) }, 3)
   assert.deepEqual(peer.sharks, before)
+})
+
+test('a catch sends the shark back to a visible surface patrol even if another swimmer remains', () => {
+  const peer = createSharkPeer(level, 'a', () => {}), s = peer.sharks[0]
+  s.x = s.homeX - 20; s.z = s.homeZ - 5; s.y = water - 5
+  const p = swimmer(s.x, s.z)
+  peer.chomp(0, 1000)
+  for (let now = 1000; now < 6900; now += 50) peer.step(p, now, .05, true)
+  assert(Math.hypot(s.x - s.homeX, s.z - s.homeZ) < 1)
+  assert(Math.abs(s.y - (water - .75)) < .1)
+  assert.equal(peer.sharks.length, createSharks(level).length)
+})
+test('losing or respawning a swimmer returns the whole flock without removing any sharks', () => {
+  const peer = createSharkPeer(level, 'a', () => {})
+  peer.sharks.filter(s => s.kind === 'cave').forEach(s => { s.x = s.homeX - 20; s.y = water - 5 })
+  peer.reset()
+  for (let now = 1000; now < 7000; now += 50) peer.step({ ...swimmer(4, -87), swimming: false }, now, .05, true)
+  for (const s of peer.sharks.filter(s => s.kind === 'cave')) {
+    assert(Math.hypot(s.x - s.homeX, s.z - s.homeZ) < 9)
+    assert(s.y > water - 1.5)
+  }
+  assert.equal(peer.sharks.filter(s => s.kind === 'cave').length, 4)
+})
+test('a client with an older cached flock cannot become the new flock simulator', () => {
+  const peer = createSharkPeer(level, 'new', () => {})
+  peer.receive({ event_type: 'water_sharks_peer', actor: 'aaa-old', sequence: 1, swimmer: swimmer() }, 0)
+  peer.step(swimmer(), 10, .05, true)
+  assert.equal(peer.leader, 'new')
+})
+test('a diver at the pool edge cannot pull a shark away from its home patrol indefinitely', () => {
+  const s = createSharks(level)[0]
+  const p = { ...swimmer(s.homeX - 29, s.homeZ), y: water - 4 }
+  assert.equal(sharkCanChase(level, s, p), false)
+})
+test('a follower can be eaten repeatedly without losing the shared flock on respawn', () => {
+  const qa = [], qb = []
+  const a = createSharkPeer(level, 'a', e => qa.push(e)), b = createSharkPeer(level, 'b', e => qb.push(e))
+  const shore = { ...swimmer(4, -87), swimming: false }
+  const relay = now => {
+    while (qa.length) b.receive(qa.shift(), now)
+    while (qb.length) a.receive(qb.shift(), now)
+  }
+  for (let now = 0; now < 1000; now += 50) { a.step(shore, now, .05, true); b.step(shore, now, .05, true); relay(now) }
+  for (let round = 0; round < 3; round++) {
+    const start = 1000 + round * 9000
+    const s = a.sharks[0]; s.x = s.homeX - 20; s.y = water - 4
+    b.chomp(0, start); relay(start); b.reset()
+    for (let now = start; now < start + 8000; now += 50) {
+      a.step(shore, now, .05, true); b.step(shore, now, .05, true); relay(now)
+    }
+    assert.equal(a.leader, 'a'); assert.equal(b.leader, 'a')
+    assert.equal(a.sharks.filter(s => s.kind === 'cave').length, 4)
+    assert.equal(b.sharks.filter(s => s.kind === 'cave').length, 4)
+    for (const s of a.sharks.filter(s => s.kind === 'cave')) assert(s.y > water - 1.5)
+    assert(Math.hypot(a.sharks[0].x-b.sharks[0].x,a.sharks[0].z-b.sharks[0].z)<1.3)
+  }
 })
