@@ -4,12 +4,13 @@ import { test } from 'node:test'
 import { build } from 'esbuild'
 
 const compiled = await build({
-  stdin: { contents: `export * from './src/game/game-mode'; export * from './src/game/everly-adventure';`, resolveDir: process.cwd() },
+  stdin: { contents: `export * from './src/game/game-mode'; export * from './src/game/everly-adventure'; export * from './src/game/everly-friends';`, resolveDir: process.cwd() },
   bundle: true, format: 'esm', platform: 'node', write: false,
 })
 const { parseGameMode, getAdventurePlayerAppearance, canShowEverlyRestartAction, shouldInitializeSharedTerrain, shouldConnectToSharedSession, shouldReloadForModeEntry,
   EVERLY_GOALS, EVERLY_RIVER, EVERLY_RIVER_BANKS, EVERLY_DRY_GROUND_CAPS, EVERLY_CASTLE_FLOOR, EVERLY_CASTLE_FRONT_WALLS, EVERLY_RIVER_EXIT_RAMPS,
-  everlyGroundRegionAt, everlyWaterSurfaceAt, everlyRampTopAtWorldX, createEverlyCloudTrail, reachedEverlyGoals, resetEverlyGoals, isEverlyDoorPress } =
+  everlyGroundRegionAt, everlyWaterSurfaceAt, everlyRampTopAtWorldX, createEverlyCloudTrail, reachedEverlyGoals, resetEverlyGoals, isEverlyDoorPress,
+  createEverlyFriendState, resetEverlyFriendState, updateEverlyFriend, EVERLY_FRIEND_ENTER_RADIUS, EVERLY_FRIEND_LEAVE_RADIUS, EVERLY_FRIEND_COOLDOWN } =
   await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
 const [scene, app, menu, main, connection, intro, player, unicornModel] = await Promise.all([
   'src/game/EverlyAdventure.tsx', 'src/App.tsx', 'src/components/GameModeMenu.tsx', 'src/main.tsx',
@@ -135,8 +136,9 @@ test('unicorn is a horse silhouette with exactly one central horn and seven sepa
   assert.match(unicornModel, /side \* \.18, 2\.91, -\.9/, 'two colored ears remain')
   assert.match(unicornModel, /rotation=\{\[-\.35, 0, 0\]\}/, 'single forehead horn points up and forward')
   assert.match(unicornModel, /tail-/)
-  assert.match(unicornModel, /locomotion === 'swim'/)
-  assert.match(scene, /<RainbowUnicornModel position=/, 'NPCs reuse the player model')
+  assert.match(unicornModel, /currentLocomotion === 'swim'/)
+  assert.match(scene, /<RainbowUnicornModel locomotionRef=/, 'NPCs reuse the player model with ref-driven movement animation')
+  assert.match(scene, /<EverlyFriend key={index} home={home}/)
   assert.match(scene, /colors\.map\(\(color, index\)/)
   assert.match(scene, /43 \+ index \* 3\.6/)
 })
@@ -170,4 +172,71 @@ test('Everly reset stays inside the existing menu and is absent during play', ()
   assert.match(menu, /M \/ MENU/)
   assert.match(app, /onRestartEverly/)
   assert.match(app, /everly:reset-goals/)
+})
+
+test('Everly friends greet only nearby same-height players, with exit hysteresis and cooldown on return', () => {
+  const home = { x: -21, y: 0, z: -38, phase: 0 }
+  const friend = createEverlyFriendState(home)
+  const tick = (player, seconds) => {
+    const steps = Math.ceil(seconds / .05)
+    for (let i = 0; i < steps; i++) updateEverlyFriend(friend, player, Math.min(.05, seconds / steps))
+  }
+  tick({ x: home.x + EVERLY_FRIEND_ENTER_RADIUS + 1, y: 0, z: home.z }, .1)
+  assert.equal(friend.greetingCount, 0, 'far player does not trigger a greeting')
+  tick({ x: home.x + 5, y: 0, z: home.z }, .05)
+  assert.equal(friend.greetingCount, 1)
+  assert.equal(friend.engaged, true)
+  assert.equal(friend.hopping, true)
+  tick({ x: home.x + 16, y: 0, z: home.z }, .05)
+  assert.equal(friend.engaged, true, 'leave threshold provides hysteresis')
+  tick({ x: home.x + EVERLY_FRIEND_LEAVE_RADIUS + .5, y: 0, z: home.z }, .05)
+  assert.equal(friend.engaged, false)
+  tick({ x: home.x + 4, y: 12, z: home.z }, .05)
+  assert.equal(friend.greetingCount, 1, 'cloud-height player is ignored')
+  tick({ x: home.x + 4, y: -1.8, z: home.z }, .05)
+  assert.equal(friend.greetingCount, 1, 'underwater player is ignored')
+  tick({ x: home.x + 4, y: 0, z: home.z }, .05)
+  assert.equal(friend.greetingCount, 1, 'return inside cooldown does not repeat')
+  tick({ x: home.x + 23, y: 0, z: home.z }, EVERLY_FRIEND_COOLDOWN + .2)
+  tick({ x: home.x + 4, y: 0, z: home.z }, .05)
+  assert.equal(friend.greetingCount, 2, 'a later return greets again')
+})
+
+test('Everly friends hop, frolic inside a small home radius, land, and reset cleanly', () => {
+  const home = { x: 22, y: 0, z: -103, phase: 1.7 }
+  const friend = createEverlyFriendState(home)
+  updateEverlyFriend(friend, { x: home.x - 3, y: 1, z: home.z }, 10)
+  assert(friend.localTime <= .05, 'large frame delta advances by at most one safe step')
+  assert(Math.hypot(friend.x - home.x, friend.z - home.z) < 2.36, 'large frame delta stays within home radius')
+  assert.equal(friend.hopping, true)
+  assert.equal(friend.motion, 'run')
+  for (let time = 0; time < 3.95; time += .05) updateEverlyFriend(friend, { x: home.x - 3, y: 1, z: home.z }, .05)
+  assert(Math.hypot(friend.x - home.x, friend.z - home.z) <= 2.6, `frolic remains in a small safe area (${Math.hypot(friend.x - home.x, friend.z - home.z)})`)
+  assert.equal(friend.hopping, false, 'hop returns to ground between playful jumps')
+  const separationFriend = createEverlyFriendState(home)
+  for (let time = 0; time < 2; time += .05) updateEverlyFriend(separationFriend, { x: home.x, y: 1.95, z: home.z }, .05)
+  assert(Math.hypot(separationFriend.x - home.x, separationFriend.z - home.z) >= 1.8, 'a friend avoids standing directly on the player')
+  assert(Math.hypot(separationFriend.x - home.x, separationFriend.z - home.z) <= 2.6, 'separation remains within the home play area')
+  updateEverlyFriend(friend, null, .05)
+  for (let time = 0; time < 2.85; time += .05) updateEverlyFriend(friend, null, .05)
+  assert(Math.hypot(friend.x - home.x, friend.z - home.z) < .01, 'friend settles back at its home')
+  friend.heading = 2; friend.cooldownUntil = 50; friend.greetingCount = 4; friend.engaged = true
+  resetEverlyFriendState(friend)
+  assert.equal(friend.greetingCount, 0)
+  assert.equal(friend.engaged, false)
+  assert.equal(friend.hopping, false)
+  assert.equal(friend.cooldownUntil, 0)
+  assert.equal(friend.heading, home.yaw ?? 0)
+  updateEverlyFriend(friend, { x: NaN, y: 0, z: 0 }, .05)
+  assert(Number.isFinite(friend.x) && Number.isFinite(friend.heading), 'invalid samples are ignored')
+  updateEverlyFriend(friend, null, -1)
+  assert.equal(friend.localTime, .05, 'negative time steps cannot rewind state')
+})
+
+test('Everly NPC reset listener is cleaned up, and QA readouts are opt-in', () => {
+  assert(scene.includes("window.addEventListener('everly:reset-goals', reset)"))
+  assert(scene.includes("window.removeEventListener('everly:reset-goals', reset)"))
+  assert.match(scene, /qaFriendInspection = false/)
+  assert(scene.includes('if (qaInspection)'))
+  assert.match(scene, /qaFriendInspection/)
 })

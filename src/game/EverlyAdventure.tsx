@@ -4,7 +4,8 @@ import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { createEverlyCloudTrail, EVERLY_CASTLE_FLOOR, EVERLY_CASTLE_FRONT_WALLS, EVERLY_DRY_GROUND_CAPS, EVERLY_RIVER, EVERLY_RIVER_BANKS, EVERLY_RIVER_EXIT_RAMPS, everlyWaterSurfaceAt, isEverlyDoorPress, reachedEverlyGoals, resetEverlyGoals, type EverlyGoal } from './everly-adventure'
-import { RainbowUnicornModel } from './RainbowUnicornModel'
+import { RainbowUnicornModel, type UnicornLocomotion } from './RainbowUnicornModel'
+import { createEverlyFriendState, resetEverlyFriendState, updateEverlyFriend, type FriendHome } from './everly-friends'
 
 declare global {
   interface Window {
@@ -136,6 +137,42 @@ function RainbowFlowers() {
   return <group name="everly-rainbow-flower-garden"><instancedMesh ref={stems} args={[undefined, undefined, count]}><cylinderGeometry args={[1, 1, 1, 5]} /><meshStandardMaterial color="#68bb75" roughness={.8} /></instancedMesh><instancedMesh ref={blooms} args={[undefined, undefined, count]}><dodecahedronGeometry args={[1, 0]} /><meshStandardMaterial roughness={.58} /></instancedMesh></group>
 }
 
+const EVERLY_FRIEND_HOMES: FriendHome[] = [
+  { x: -21, y: 0, z: -38, phase: 0, yaw: Math.PI - .28 },
+  { x: 22, y: 0, z: -103, phase: 1.7, yaw: 0 },
+  { x: -48, y: 0, z: -112, phase: 3.4, yaw: Math.PI },
+]
+
+function EverlyFriend({ home, index, qaInspection }: { home: FriendHome; index: number; qaInspection: boolean }) {
+  const state = useMemo(() => createEverlyFriendState(home), [home])
+  const root = useRef<THREE.Group>(null)
+  const locomotion = useRef<UnicornLocomotion>('idle')
+  useEffect(() => {
+    const reset = () => resetEverlyFriendState(state)
+    window.addEventListener('everly:reset-goals', reset)
+    return () => window.removeEventListener('everly:reset-goals', reset)
+  }, [state])
+  useFrame((_, delta) => {
+    const player = window.__localPlayerPosition
+    updateEverlyFriend(state, player ? player : null, delta)
+    locomotion.current = state.motion
+    if (!root.current) return
+    root.current.position.set(state.x, state.y, state.z)
+    root.current.rotation.y = state.heading
+    if (qaInspection) {
+      const data = root.current.userData
+      data.friendIndex = index
+      data.engaged = state.engaged
+      data.hopping = state.hopping
+      data.greetingCount = state.greetingCount
+      data.x = state.x; data.y = state.y; data.z = state.z
+    }
+  })
+  return <group ref={root} name={`everly-friend-${index}`} position={[home.x, home.y, home.z]}>
+    <RainbowUnicornModel locomotionRef={locomotion} phase={home.phase} />
+  </group>
+}
+
 function makeEverlyFishGeometry() {
   const body = new THREE.SphereGeometry(1, 12, 8).toNonIndexed(); body.scale(.32, .22, .72)
   const positions: number[] = [], colors: number[] = []
@@ -194,7 +231,7 @@ function River() {
   </group>
 }
 
-export function EverlyAdventure() {
+export function EverlyAdventure({ qaFriendInspection = false }: { qaFriendInspection?: boolean } = {}) {
   const [completed, setCompleted] = useState<Set<EverlyGoal>>(resetEverlyGoals)
   const completedRef = useRef(completed); completedRef.current = completed
   const completeCastle = () => {
@@ -236,9 +273,7 @@ export function EverlyAdventure() {
     <Castle onOpened={completeCastle} />
     <CloudPath />
     <RainbowFlowers />
-    <RainbowUnicornModel position={[-21, 0, -38]} yaw={Math.PI - .28} phase={0} ambient />
-    <RainbowUnicornModel position={[22, 0, -103]} yaw={0} phase={1.7} ambient />
-    <RainbowUnicornModel position={[-48, 0, -112]} yaw={Math.PI} phase={3.4} ambient />
+    {EVERLY_FRIEND_HOMES.map((home, index) => <EverlyFriend key={index} home={home} index={index} qaInspection={qaFriendInspection} />)}
     <mesh position={[-30, 1.3, 8]}><torusGeometry args={[2.3, .12, 8, 32]} /><meshStandardMaterial color="#ffe78b" emissive="#ffb6d8" emissiveIntensity={.4} /></mesh>
     <mesh position={[0, .25, 47]} rotation={[-Math.PI / 2, 0, 0]}><ringGeometry args={[12, 20, 32]} /><meshStandardMaterial color="#fff1f9" emissive="#f7a9dc" emissiveIntensity={.2} roughness={.8} /></mesh>
   </>

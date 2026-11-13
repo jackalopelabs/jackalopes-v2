@@ -1,16 +1,18 @@
 import { useRef } from 'react'
+import type { MutableRefObject } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 
 export type UnicornLocomotion = 'idle' | 'walk' | 'run' | 'swim'
 
 export function RainbowUnicornModel({
-  position = [0, 0, 0], scale = 1, yaw = 0, locomotion = 'idle', phase = 0, ambient = false,
+  position = [0, 0, 0], scale = 1, yaw = 0, locomotion = 'idle', locomotionRef, phase = 0, ambient = false,
 }: {
   position?: [number, number, number]
   scale?: number
   yaw?: number
   locomotion?: UnicornLocomotion
+  locomotionRef?: MutableRefObject<UnicornLocomotion>
   phase?: number
   ambient?: boolean
 }) {
@@ -19,10 +21,11 @@ export function RainbowUnicornModel({
   const legs = useRef<(THREE.Group | null)[]>([])
   useFrame(({ clock }, delta) => {
     const t = clock.elapsedTime + phase
-    const swimming = locomotion === 'swim'
-    const moving = locomotion === 'walk' || locomotion === 'run'
-    const rate = locomotion === 'run' ? 9 : locomotion === 'walk' ? 5.5 : swimming ? 3.2 : 1.5
-    const stride = locomotion === 'run' ? .52 : locomotion === 'walk' ? .34 : swimming ? .62 : .055
+    const currentLocomotion = locomotionRef?.current ?? locomotion
+    const swimming = currentLocomotion === 'swim'
+    const moving = currentLocomotion === 'walk' || currentLocomotion === 'run'
+    const rate = currentLocomotion === 'run' ? 9 : currentLocomotion === 'walk' ? 5.5 : swimming ? 3.2 : 1.5
+    const stride = currentLocomotion === 'run' ? .52 : currentLocomotion === 'walk' ? .34 : swimming ? .62 : .055
     legs.current.forEach((leg, index) => {
       if (leg) leg.rotation.x = Math.sin(t * rate + (index % 2) * Math.PI) * stride
     })
