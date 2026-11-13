@@ -3,7 +3,7 @@ import { Html } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { createEverlyCloudTrail, EVERLY_CASTLE_FLOOR, EVERLY_CASTLE_FRONT_WALLS, EVERLY_DRY_GROUND_CAPS, EVERLY_GOALS, EVERLY_RIVER, EVERLY_RIVER_BANKS, everlyWaterSurfaceAt, isEverlyDoorPress, reachedEverlyGoals, resetEverlyGoals, type EverlyGoal } from './everly-adventure'
+import { createEverlyCloudTrail, EVERLY_CASTLE_FLOOR, EVERLY_CASTLE_FRONT_WALLS, EVERLY_DRY_GROUND_CAPS, EVERLY_GOALS, EVERLY_RIVER, EVERLY_RIVER_BANKS, EVERLY_RIVER_EXIT_RAMPS, everlyWaterSurfaceAt, isEverlyDoorPress, reachedEverlyGoals, resetEverlyGoals, type EverlyGoal } from './everly-adventure'
 
 declare global {
   interface Window {
@@ -251,9 +251,9 @@ export function EverlyAdventure() {
       </group>)}
       <mesh position={[0, EVERLY_RIVER.bed + .02, EVERLY_RIVER.centerZ]}><boxGeometry args={[14, .35, EVERLY_RIVER.halfLength * 2]} /><meshStandardMaterial color="#d58dbd" roughness={1} /></mesh>
     </RigidBody>
-    {[-1, 1].map(side => <RigidBody key={side} type="fixed" colliders={false} position={[side * 9.2, -2.05, 42]} rotation={[0, 0, side * .72]} name={`everly-river-shore-ramp-${side}`}>
-      <CuboidCollider args={[3.9, .28, 4.5]} friction={.9} />
-      <mesh castShadow receiveShadow><boxGeometry args={[7.8, .5, 9]} /><meshStandardMaterial color="#ffc1e4" roughness={.82} /></mesh>
+    {EVERLY_RIVER_EXIT_RAMPS.map(ramp => <RigidBody key={ramp.side} type="fixed" colliders={false} position={[ramp.centerX, ramp.centerY, ramp.centerZ]} rotation={[0, 0, ramp.rotationZ]} name={`everly-river-shore-ramp-${ramp.side}`}>
+      <CuboidCollider args={[ramp.halfWidth, ramp.halfHeight, ramp.halfDepth]} friction={.9} />
+      <mesh castShadow receiveShadow><boxGeometry args={[ramp.halfWidth * 2, ramp.halfHeight * 2, ramp.halfDepth * 2]} /><meshStandardMaterial color="#ffc1e4" roughness={.82} /></mesh>
     </RigidBody>)}
     <River />
     <Castle onOpened={completeCastle} />

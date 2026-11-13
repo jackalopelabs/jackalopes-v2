@@ -15,6 +15,11 @@ export const EVERLY_DRY_GROUND_CAPS = [
   { id: 'river-exit', centerX: 0, centerZ: 54, halfWidth: 7, halfDepth: 8 },
   { id: 'castle-approach', centerX: 0, centerZ: -53, halfWidth: 7, halfDepth: 5 },
 ] as const
+/** Rotated solid ramps start inside the channel so a floating avatar climbs before the bank wall. */
+export const EVERLY_RIVER_EXIT_RAMPS = [
+  { side: -1, centerX: -4.8, centerY: -2, centerZ: 42, halfWidth: 3.6, halfHeight: 0.28, halfDepth: 4.5, rotationZ: -0.65 },
+  { side: 1, centerX: 4.8, centerY: -2, centerZ: 42, halfWidth: 3.6, halfHeight: 0.28, halfDepth: 4.5, rotationZ: 0.65 },
+] as const
 export const EVERLY_CASTLE_FLOOR = { centerX: 0, centerY: 0.05, centerZ: -68, halfWidth: 14, halfDepth: 13, halfHeight: 0.1 } as const
 export const EVERLY_CASTLE_FRONT_WALLS = [
   { centerX: -7.5, halfWidth: 4.5 },
@@ -33,6 +38,14 @@ export function everlyGroundRegionAt(x: number, z: number): string | null {
       Math.abs(z - EVERLY_CASTLE_FLOOR.centerZ) <= EVERLY_CASTLE_FLOOR.halfDepth) return 'castle-floor'
   const cap = EVERLY_DRY_GROUND_CAPS.find(region => Math.abs(x - region.centerX) <= region.halfWidth && Math.abs(z - region.centerZ) <= region.halfDepth)
   return cap?.id ?? null
+}
+
+/** World-space top of the rotated ramp, or null outside its top-face span. */
+export function everlyRampTopAtWorldX(ramp: typeof EVERLY_RIVER_EXIT_RAMPS[number], x: number): number | null {
+  const sine = Math.sin(ramp.rotationZ), cosine = Math.cos(ramp.rotationZ)
+  const localX = (x - ramp.centerX + ramp.halfHeight * sine) / cosine
+  if (Math.abs(localX) > ramp.halfWidth) return null
+  return ramp.centerY + localX * sine + ramp.halfHeight * cosine
 }
 
 /** Body-origin swim sample for Everly's private river. It never reads the shared terrain document. */

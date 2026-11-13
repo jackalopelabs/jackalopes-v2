@@ -8,8 +8,8 @@ const compiled = await build({
   bundle: true, format: 'esm', platform: 'node', write: false,
 })
 const { parseGameMode, shouldInitializeSharedTerrain, shouldConnectToSharedSession, shouldReloadForModeEntry,
-  EVERLY_GOALS, EVERLY_RIVER, EVERLY_RIVER_BANKS, EVERLY_DRY_GROUND_CAPS, EVERLY_CASTLE_FLOOR, EVERLY_CASTLE_FRONT_WALLS,
-  everlyGroundRegionAt, everlyWaterSurfaceAt, createEverlyCloudTrail, reachedEverlyGoals, resetEverlyGoals, isEverlyDoorPress } =
+  EVERLY_GOALS, EVERLY_RIVER, EVERLY_RIVER_BANKS, EVERLY_DRY_GROUND_CAPS, EVERLY_CASTLE_FLOOR, EVERLY_CASTLE_FRONT_WALLS, EVERLY_RIVER_EXIT_RAMPS,
+  everlyGroundRegionAt, everlyWaterSurfaceAt, everlyRampTopAtWorldX, createEverlyCloudTrail, reachedEverlyGoals, resetEverlyGoals, isEverlyDoorPress } =
   await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
 const [scene, app, menu, main, connection, intro] = await Promise.all([
   'src/game/EverlyAdventure.tsx', 'src/App.tsx', 'src/components/GameModeMenu.tsx', 'src/main.tsx',
@@ -62,6 +62,30 @@ test('river endcaps and castle floor match real scene ground regions instead of 
   assert.equal(everlyGroundRegionAt(0, NaN), null)
   assert.deepEqual(EVERLY_DRY_GROUND_CAPS.map(({ id }) => id), ['river-exit', 'castle-approach'])
   assert.equal(EVERLY_CASTLE_FLOOR.centerZ, -68)
+})
+
+test('river exit ramps meet the bed inside the bank, intercept floating feet before the wall, and reach deck height', () => {
+  const capsule = { halfHeight: 0.85, radius: 0.35 }, floatingRootY = -0.2, colliderOffsetY = -0.65
+  const floatingFeetY = floatingRootY + colliderOffsetY - capsule.halfHeight - capsule.radius
+  for (const ramp of EVERLY_RIVER_EXIT_RAMPS) {
+    const innerX = ramp.centerX - ramp.side * (ramp.halfWidth * Math.cos(Math.abs(ramp.rotationZ)) + ramp.halfHeight * Math.sin(Math.abs(ramp.rotationZ)))
+    let low = innerX * ramp.side, high = EVERLY_RIVER.right
+    for (let i = 0; i < 32; i++) {
+      const middle = (low + high) / 2
+      const surface = everlyRampTopAtWorldX(ramp, ramp.side * middle)
+      if (surface !== null && surface < EVERLY_RIVER.bed) low = middle
+      else high = middle
+    }
+    const bedCrossingX = ramp.side * ((low + high) / 2)
+    const bedCrossingTop = everlyRampTopAtWorldX(ramp, bedCrossingX)
+    const bankTop = everlyRampTopAtWorldX(ramp, ramp.side * EVERLY_RIVER.right)
+    const beforeWallTop = everlyRampTopAtWorldX(ramp, ramp.side * (EVERLY_RIVER.right - capsule.radius))
+    assert(innerX * ramp.side > 0 && innerX * ramp.side < EVERLY_RIVER.right, 'ramp begins inside the channel')
+    assert(bedCrossingTop !== null && Math.abs(bedCrossingTop - EVERLY_RIVER.bed) < 0.1, 'ramp surface rises through the riverbed height inside the channel')
+    assert(bankTop !== null && bankTop >= -0.1, 'outer ramp end reaches the bank deck')
+    assert(beforeWallTop !== null && beforeWallTop > floatingFeetY, 'ramp catches a floating player before its capsule hits the vertical bank')
+    assert(ramp.centerZ + ramp.halfDepth >= EVERLY_RIVER.farZ, 'ramp overlaps the dry exit landing')
+  }
 })
 
 test('cloud trail is continuous, solid, broad and reaches the castle-height summit', () => {
