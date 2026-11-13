@@ -46,6 +46,9 @@ test('Everly always resolves to its playable unicorn while classic avatar prefer
   assert.match(app, /getAdventurePlayerAppearance\(gameMode, savedAdventureAvatar\)/)
   assert.match(app, /playerAppearance === 'unicorn'/)
   assert.match(player, /rainbowUnicorn \? <RainbowUnicornModel/)
+  assert.match(player, /const modelFootOffset = rainbowUnicorn \? 1\.95 : 2\.15/)
+  assert.equal((player.match(/position\.current\.y - modelFootOffset/g) || []).length, 5, 'initial, resilient, repair, per-frame and JSX placements share the foot offset')
+  assert.doesNotMatch(player, /position\.current\.y - 2\.15/)
 })
 
 test('private river bounds, clear bank edges, bed and swim sampler are consistent', () => {

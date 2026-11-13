@@ -135,6 +135,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
     const jackalopeModelRef = useRef<THREE.Group>(null)
     const jackalopeLeanRef = useRef<THREE.Group>(null)
     const fpModelRef = useRef<THREE.Group>(null)
+    const modelFootOffset = rainbowUnicorn ? 1.95 : 2.15
     
     // Physics
     const rapier = useRapier()
@@ -234,8 +235,11 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         
         // Also initialize the model position directly
         if (jackalopeModelRef.current && thirdPersonView) {
-            jackalopeModelRef.current.position.copy(position.current)
-            jackalopeModelRef.current.position.y -= 0.65 // Apply the height offset
+            jackalopeModelRef.current.position.set(
+                position.current.x,
+                position.current.y - modelFootOffset,
+                position.current.z
+            )
         }
         
         return () => {
@@ -275,7 +279,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
                 // Force the model to be at the correct position
                 jackalopeModelRef.current.position.set(
                     position.current.x,
-                    position.current.y - 2.15,
+                    position.current.y - modelFootOffset,
                     position.current.z
                 );
                 
@@ -300,7 +304,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         );
         
         return () => timers.forEach(timer => clearTimeout(timer));
-    }, [thirdPersonView, visible]);
+    }, [thirdPersonView, visible, rainbowUnicorn]);
     
     // Listen for respawn event - only affects local player
     const handleRespawn = useCallback((event: CustomEvent) => {
@@ -886,7 +890,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
                 console.log(`[JACKALOPE] Model position out of bounds (y=${modelY.toFixed(2)}), resetting position`);
                 position.current.copy(recoveryPosition.current);
                 velocity.current.set(0, 0, 0);
-                jackalopeModelRef.current.position.y = position.current.y - 2.15;
+                jackalopeModelRef.current.position.y = position.current.y - modelFootOffset;
                 rigidBody.setNextKinematicTranslation(position.current);
             }
         }
@@ -909,7 +913,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
             // Outer group handles world position and yaw only.
             jackalopeModelRef.current.position.set(
                 position.current.x,
-                position.current.y - 2.15,
+                position.current.y - modelFootOffset,
                 position.current.z
             )
             jackalopeModelRef.current.rotation.set(0, rotation.current + Math.PI, 0)
@@ -1113,7 +1117,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
                 <group 
                     ref={jackalopeModelRef} 
                     scale={[2, 2, 2]}
-                    position={[position.current.x, position.current.y - (rainbowUnicorn ? 1.85 : 2.15), position.current.z]}
+                    position={[position.current.x, position.current.y - modelFootOffset, position.current.z]}
                     rotation={[0, rotation.current + Math.PI, 0]}
                 >
                     <group ref={jackalopeLeanRef}>
