@@ -10,7 +10,8 @@ const compiled = await build({
 const { parseGameMode, getAdventurePlayerAppearance, canShowEverlyRestartAction, shouldInitializeSharedTerrain, shouldConnectToSharedSession, shouldReloadForModeEntry,
   EVERLY_GOALS, EVERLY_RIVER, EVERLY_RIVER_BANKS, EVERLY_DRY_GROUND_CAPS, EVERLY_CASTLE_FLOOR, EVERLY_CASTLE_FRONT_WALLS, EVERLY_RIVER_EXIT_RAMPS,
   everlyGroundRegionAt, everlyWaterSurfaceAt, everlyRampTopAtWorldX, createEverlyCloudTrail, reachedEverlyGoals, resetEverlyGoals, isEverlyDoorPress,
-  createEverlyFriendState, resetEverlyFriendState, updateEverlyFriend, EVERLY_FRIEND_ENTER_RADIUS, EVERLY_FRIEND_LEAVE_RADIUS, EVERLY_FRIEND_COOLDOWN } =
+  createEverlyFollowTrail, createEverlyFriendState, everlyFollowerSegmentSafe, recordEverlyPlayerTrail, resetEverlyFollowTrail,
+  resetEverlyFriendState, updateEverlyFriend, EVERLY_FRIEND_ENTER_RADIUS, EVERLY_FRIEND_LEAVE_RADIUS, EVERLY_FRIEND_COOLDOWN } =
   await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
 const [scene, app, menu, main, connection, intro, player, unicornModel] = await Promise.all([
   'src/game/EverlyAdventure.tsx', 'src/App.tsx', 'src/components/GameModeMenu.tsx', 'src/main.tsx',
@@ -200,6 +201,126 @@ test('Everly friends greet only nearby same-height players, with exit hysteresis
   tick({ x: home.x + 23, y: 0, z: home.z }, EVERLY_FRIEND_COOLDOWN + .2)
   tick({ x: home.x + 4, y: 0, z: home.z }, .05)
   assert.equal(friend.greetingCount, 2, 'a later return greets again')
+})
+
+test('Everly follower route joins at recruit range, follows a long dry route, and catches up at bounded speed', () => {
+  const home = { x: -21, y: 0, z: -38, phase: 0 }
+  const friend = createEverlyFriendState(home), trail = createEverlyFollowTrail()
+  const player = { x: home.x, y: 1.95, z: home.z + 10 }
+  recordEverlyPlayerTrail(trail, player, true)
+  updateEverlyFriend(friend, player, .05, trail, true, 0)
+  assert.equal(friend.recruited, true, 'approach at ten metres recruits inside the fourteen metre join range')
+  const xStart = friend.x, zStart = friend.z
+  let maxStep = 0
+  for (let frame = 0; frame < 60 * 8; frame++) {
+    const dt = 1 / 60
+    player.z += 12.24 * dt
+    recordEverlyPlayerTrail(trail, player, true)
+    const oldX = friend.x, oldZ = friend.z
+    updateEverlyFriend(friend, player, dt, trail, true, 0)
+    maxStep = Math.max(maxStep, Math.hypot(friend.x - oldX, friend.z - oldZ) / dt)
+  }
+  assert(Math.hypot(friend.x - home.x, friend.z - home.z) > 30, 'friend follows well beyond its original frolic/home radius')
+  assert(Math.hypot(player.x - friend.x, player.z - friend.z) >= 2.7, 'friend keeps a comfortable trailing gap')
+  assert(maxStep <= 13.21, `catch-up remains bounded at ${maxStep.toFixed(2)}m/s`)
+  assert(maxStep >= 12.2, `lagging friend can catch a sprinting player (max measured ${maxStep.toFixed(2)}m/s; route ${friend.routeCursor.toFixed(1)}/${trail.totalDistance.toFixed(1)}; state ${friend.waitingReason})`)
+  assert(Math.hypot(friend.x - xStart, friend.z - zStart) > 30, 'the recruited follower leaves its home area')
+  assert.equal(friend.motion, 'run')
+})
+
+test('Everly following distance and gait are stable at 30 and 60 fps', () => {
+  const simulate = fps => {
+    const home = { x: -21, y: 0, z: -38, phase: .2 }, friend = createEverlyFriendState(home), trail = createEverlyFollowTrail()
+    const player = { x: -21, y: 1.95, z: -28 }
+    recordEverlyPlayerTrail(trail, player, true); updateEverlyFriend(friend, player, 1 / fps, trail, true, 0)
+    let runFrames = 0
+    for (let frame = 0; frame < fps * 4; frame++) {
+      player.z += 12.24 / fps
+      recordEverlyPlayerTrail(trail, player, true)
+      updateEverlyFriend(friend, player, 1 / fps, trail, true, 0)
+      if (friend.motion === 'run') runFrames++
+    }
+    return { friend, player, runFrames }
+  }
+  const at30 = simulate(30), at60 = simulate(60)
+  assert(Math.abs(at30.friend.z - at60.friend.z) < 1.4, `position difference ${Math.abs(at30.friend.z - at60.friend.z).toFixed(2)}m`)
+  assert(at30.runFrames > 0 && at60.runFrames > 0, 'gait follows measured speed, not a frame-specific displacement threshold')
+  assert(Math.abs((at30.player.z - at30.friend.z) - (at60.player.z - at60.friend.z)) < 1.4)
+})
+
+test('Everly companions retain distinct trail offsets instead of stacking', () => {
+  const home = { x: -21, y: 0, z: -38, phase: 0 }, trail = createEverlyFollowTrail()
+  const friends = [0, 1, 2].map(() => createEverlyFriendState(home))
+  const player = { x: -21, y: 1.95, z: -28 }
+  recordEverlyPlayerTrail(trail, player, true)
+  for (const [index, friend] of friends.entries()) updateEverlyFriend(friend, player, .05, trail, true, index)
+  for (let frame = 0; frame < 60 * 7; frame++) {
+    player.z += 6.8 / 60
+    recordEverlyPlayerTrail(trail, player, true)
+    friends.forEach((friend, index) => updateEverlyFriend(friend, player, 1 / 60, trail, true, index))
+  }
+  assert(Math.abs(friends[0].z - friends[1].z) >= 3.4, 'adult unicorn bodies keep a clear first-to-second following gap')
+  assert(Math.abs(friends[1].z - friends[2].z) >= 3.4, 'adult unicorn bodies keep a clear second-to-third following gap')
+  assert(friends[0].z > friends[1].z && friends[1].z > friends[2].z, 'companions follow in offset order behind the player')
+})
+
+test('Everly follower uses scene ground/slab geometry and never shortcuts water, closed doors, or castle walls', () => {
+  assert.equal(everlyFollowerSegmentSafe(-8, 0, -12, 0, false), true, 'same-bank path is walkable with shore-edge margin')
+  assert.equal(everlyFollowerSegmentSafe(-6.8, 0, -12, 0, false), false, 'body margin keeps the follower off the river edge')
+  assert.equal(everlyFollowerSegmentSafe(0, -52, 0, -57, false), false, 'closed door leaves block the actual central doorway')
+  assert.equal(everlyFollowerSegmentSafe(0, -52, 0, -57, true), true, 'open doorway connects the walkable approach and floor')
+  assert.equal(everlyFollowerSegmentSafe(-8, -52, -8, -57, true), false, 'front wall slab remains solid outside the doorway')
+  assert.equal(everlyFollowerSegmentSafe(13, -68, 17, -68, true), false, 'side wall prevents castle shortcut')
+  assert.equal(everlyFollowerSegmentSafe(0, -80, 0, -84, true), false, 'back wall/exterior crossing is rejected')
+  assert.equal(everlyFollowerSegmentSafe(-8, 0, 8, 0, true), false, 'route cannot cross the river')
+})
+
+test('Everly follower waits idle through water/cloud/teleport gaps and safely rejoins on nearby dry ground', () => {
+  const home = { x: -21, y: 0, z: -38, phase: .4 }, friend = createEverlyFriendState(home), trail = createEverlyFollowTrail()
+  const player = { x: -21, y: 1.95, z: -33 }
+  recordEverlyPlayerTrail(trail, player, true); updateEverlyFriend(friend, player, .05, trail, true, 0)
+  friend.motion = 'run'
+  recordEverlyPlayerTrail(trail, { x: -21, y: -1.8, z: -30 }, true)
+  updateEverlyFriend(friend, { x: -21, y: -1.8, z: -30 }, .05, trail, true, 0)
+  assert.equal(friend.motion, 'idle', 'underwater player leaves follower waiting without stale run animation')
+  const beforeGap = { x: friend.x, z: friend.z }
+  recordEverlyPlayerTrail(trail, { x: -21, y: 12, z: -20 }, true)
+  recordEverlyPlayerTrail(trail, { x: -21, y: 1.95, z: -32 }, true)
+  assert.equal(trail.discontinuity, true, 'return creates a new grounded trail generation')
+  for (let i = 0; i < 20; i++) updateEverlyFriend(friend, { x: -21, y: 1.95, z: -32 }, .05, trail, true, 0)
+  assert(Math.hypot(friend.x - beforeGap.x, friend.z - beforeGap.z) < 13.21, 'rejoin uses bounded walking, never a snap')
+  assert.equal(friend.routeGeneration, trail.generation)
+  const x = friend.x, z = friend.z
+  recordEverlyPlayerTrail(trail, { x: 400, y: 1.95, z: 400 }, true)
+  updateEverlyFriend(friend, { x: 400, y: 1.95, z: 400 }, .05, trail, true, 0)
+  assert(Math.hypot(friend.x - x, friend.z - z) <= .661, 'teleport cannot move a friend across the map')
+})
+
+test('Everly follower reset clears recruited route and cooldown state', () => {
+  const friend = createEverlyFriendState({ x: -21, y: 0, z: -38, phase: 0 }), trail = createEverlyFollowTrail()
+  const player = { x: -21, y: 1.95, z: -35 }
+  recordEverlyPlayerTrail(trail, player, true); updateEverlyFriend(friend, player, .05, trail, true, 0)
+  assert.equal(friend.recruited, true)
+  assert(trail.nextSequence > 0)
+  resetEverlyFriendState(friend); resetEverlyFollowTrail(trail)
+  assert.equal(friend.recruited, false); assert.equal(friend.following, false); assert.equal(friend.routeSeeded, false)
+  assert.equal(friend.cooldownUntil, 0); assert.equal(trail.nextSequence, 0); assert.equal(trail.generation, 0)
+})
+
+test('Everly bounded trail rollover waits instead of interpolating through pruned corners', () => {
+  const home = { x: -21, y: 0, z: -135, phase: 0 }, friend = createEverlyFriendState(home), trail = createEverlyFollowTrail()
+  const player = { x: -21, y: 1.95, z: -130 }
+  recordEverlyPlayerTrail(trail, player, true); updateEverlyFriend(friend, player, .05, trail, true, 0)
+  const homeX = friend.x, homeZ = friend.z
+  for (let index = 1; index <= 290; index++) {
+    player.z = -130 + index * 0.5
+    recordEverlyPlayerTrail(trail, player, true)
+  }
+  assert(trail.nextSequence > 256, 'fixed-size breadcrumb ring rolled over')
+  updateEverlyFriend(friend, player, .05, trail, true, 0)
+  assert.equal(friend.routeSeeded, false, 'discarded route history is not interpolated across')
+  assert.equal(friend.waiting, true)
+  assert(Math.hypot(friend.x - homeX, friend.z - homeZ) <= .41, 'no snap or shortcut to a later route point')
 })
 
 test('Everly friends hop, frolic inside a small home radius, land, and reset cleanly', () => {

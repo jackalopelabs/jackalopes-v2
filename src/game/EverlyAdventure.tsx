@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { createEverlyCloudTrail, EVERLY_CASTLE_FLOOR, EVERLY_CASTLE_FRONT_WALLS, EVERLY_DRY_GROUND_CAPS, EVERLY_RIVER, EVERLY_RIVER_BANKS, EVERLY_RIVER_EXIT_RAMPS, everlyWaterSurfaceAt, isEverlyDoorPress, reachedEverlyGoals, resetEverlyGoals, type EverlyGoal } from './everly-adventure'
 import { RainbowUnicornModel, type UnicornLocomotion } from './RainbowUnicornModel'
-import { createEverlyFriendState, resetEverlyFriendState, updateEverlyFriend, type FriendHome } from './everly-friends'
+import { createEverlyFollowTrail, createEverlyFriendState, recordEverlyPlayerTrail, resetEverlyFollowTrail, resetEverlyFriendState, updateEverlyFriend, type EverlyFollowTrail, type FriendHome } from './everly-friends'
 
 declare global {
   interface Window {
@@ -26,14 +26,14 @@ function CloudPath() {
   </group>
 }
 
-function CastleDoors({ onOpened }: { onOpened: () => void }) {
+function CastleDoors({ onOpened, onDoorStateChange }: { onOpened: () => void; onDoorStateChange: (open: boolean) => void }) {
   const left = useRef<RapierRigidBody>(null), right = useRef<RapierRigidBody>(null)
   const target = useRef(0), angle = useRef(0), held = useRef(false), nearRef = useRef(false)
   const [near, setNear] = useState(false), [opened, setOpened] = useState(false)
   const axis = useMemo(() => new THREE.Vector3(0, 1, 0), [])
   const leftRotation = useMemo(() => new THREE.Quaternion(), []), rightRotation = useMemo(() => new THREE.Quaternion(), [])
   useEffect(() => {
-    const reset = () => { target.current = 0; angle.current = 0; setOpened(false) }
+    const reset = () => { target.current = 0; angle.current = 0; setOpened(false); onDoorStateChange(false) }
     window.addEventListener('everly:reset-goals', reset)
     return () => window.removeEventListener('everly:reset-goals', reset)
   }, [])
@@ -46,6 +46,7 @@ function CastleDoors({ onOpened }: { onOpened: () => void }) {
     if (isNear && isEverlyDoorPress(pressed, held.current)) {
       target.current = target.current ? 0 : 1
       setOpened(!!target.current)
+      onDoorStateChange(!!target.current)
       if (target.current) onOpened()
     }
     held.current = pressed
@@ -71,7 +72,7 @@ function CastleDoors({ onOpened }: { onOpened: () => void }) {
   </group>
 }
 
-function Castle({ onOpened }: { onOpened: () => void }) {
+function Castle({ onOpened, onDoorStateChange }: { onOpened: () => void; onDoorStateChange: (open: boolean) => void }) {
   return <group name="everly-pink-castle">
     <RigidBody type="fixed" colliders={false}>
       {EVERLY_CASTLE_FRONT_WALLS.map(wall => <CuboidCollider key={wall.centerX} args={[wall.halfWidth, 6, .65]} position={[wall.centerX, 6, -54]} />)}
@@ -85,7 +86,7 @@ function Castle({ onOpened }: { onOpened: () => void }) {
       <mesh position={[14.35, 6, -68]} castShadow><boxGeometry args={[1.3, 12, 28]} /><meshStandardMaterial color="#f786c0" roughness={.78} /></mesh>
       <mesh position={[EVERLY_CASTLE_FLOOR.centerX, EVERLY_CASTLE_FLOOR.centerY, EVERLY_CASTLE_FLOOR.centerZ]} receiveShadow><boxGeometry args={[EVERLY_CASTLE_FLOOR.halfWidth * 2, EVERLY_CASTLE_FLOOR.halfHeight * 2, EVERLY_CASTLE_FLOOR.halfDepth * 2]} /><meshStandardMaterial color="#ffcae6" roughness={.9} /></mesh>
     </RigidBody>
-    <CastleDoors onOpened={onOpened} />
+    <CastleDoors onOpened={onOpened} onDoorStateChange={onDoorStateChange} />
     {[-12.5, 12.5].map((x, i) => <group key={x} position={[x, 0, -57]}>
       <mesh position={[0, 7, 0]} castShadow><cylinderGeometry args={[2.4, 3, 14, 8]} /><meshStandardMaterial color={i ? '#ffb0d6' : '#f594c8'} roughness={.66} /></mesh>
       <mesh position={[0, 14.2, 0]}><coneGeometry args={[2.3, 4, 8]} /><meshStandardMaterial color={i ? '#c99af9' : '#ff83b9'} roughness={.6} /></mesh>
@@ -143,7 +144,7 @@ const EVERLY_FRIEND_HOMES: FriendHome[] = [
   { x: -48, y: 0, z: -112, phase: 3.4, yaw: Math.PI },
 ]
 
-function EverlyFriend({ home, index, qaInspection }: { home: FriendHome; index: number; qaInspection: boolean }) {
+function EverlyFriend({ home, index, qaInspection, trail, doorsOpen }: { home: FriendHome; index: number; qaInspection: boolean; trail: EverlyFollowTrail; doorsOpen: boolean }) {
   const state = useMemo(() => createEverlyFriendState(home), [home])
   const root = useRef<THREE.Group>(null)
   const locomotion = useRef<UnicornLocomotion>('idle')
@@ -154,7 +155,7 @@ function EverlyFriend({ home, index, qaInspection }: { home: FriendHome; index: 
   }, [state])
   useFrame((_, delta) => {
     const player = window.__localPlayerPosition
-    updateEverlyFriend(state, player ? player : null, delta)
+    updateEverlyFriend(state, player ? player : null, delta, trail, doorsOpen, index)
     locomotion.current = state.motion
     if (!root.current) return
     root.current.position.set(state.x, state.y, state.z)
@@ -165,6 +166,10 @@ function EverlyFriend({ home, index, qaInspection }: { home: FriendHome; index: 
       data.engaged = state.engaged
       data.hopping = state.hopping
       data.greetingCount = state.greetingCount
+      data.following = state.following
+      data.waiting = state.waiting
+      data.waitingReason = state.waitingReason
+      data.state = state.recruited ? (state.following ? 'following' : 'waiting') : (state.engaged ? 'greeting' : 'home')
       data.x = state.x; data.y = state.y; data.z = state.z
     }
   })
@@ -233,13 +238,21 @@ function River() {
 
 export function EverlyAdventure({ qaFriendInspection = false }: { qaFriendInspection?: boolean } = {}) {
   const [completed, setCompleted] = useState<Set<EverlyGoal>>(resetEverlyGoals)
+  const [castleDoorsOpen, setCastleDoorsOpen] = useState(false)
+  const followTrail = useMemo(createEverlyFollowTrail, [])
   const completedRef = useRef(completed); completedRef.current = completed
   const completeCastle = () => {
     setCompleted(previous => new Set(previous).add('castle'))
     window.dispatchEvent(new CustomEvent('everly:goal-complete', { detail: { ids: ['castle'] } }))
   }
+  useEffect(() => {
+    const reset = () => resetEverlyFollowTrail(followTrail)
+    window.addEventListener('everly:reset-goals', reset)
+    return () => window.removeEventListener('everly:reset-goals', reset)
+  }, [followTrail])
   useFrame(() => {
     const position = window.__localPlayerPosition
+    recordEverlyPlayerTrail(followTrail, position ?? null, castleDoorsOpen)
     if (!position) return
     const found = reachedEverlyGoals(position, completedRef.current)
       .filter(id => id !== 'fish' || everlyWaterSurfaceAt(position.x, position.y, position.z, true) !== null)
@@ -270,10 +283,10 @@ export function EverlyAdventure({ qaFriendInspection = false }: { qaFriendInspec
       <mesh castShadow receiveShadow><boxGeometry args={[ramp.halfWidth * 2, ramp.halfHeight * 2, ramp.halfDepth * 2]} /><meshStandardMaterial color="#ffc1e4" roughness={.82} /></mesh>
     </RigidBody>)}
     <River />
-    <Castle onOpened={completeCastle} />
+    <Castle onOpened={completeCastle} onDoorStateChange={setCastleDoorsOpen} />
     <CloudPath />
     <RainbowFlowers />
-    {EVERLY_FRIEND_HOMES.map((home, index) => <EverlyFriend key={index} home={home} index={index} qaInspection={qaFriendInspection} />)}
+    {EVERLY_FRIEND_HOMES.map((home, index) => <EverlyFriend key={index} home={home} index={index} qaInspection={qaFriendInspection} trail={followTrail} doorsOpen={castleDoorsOpen} />)}
     <mesh position={[-30, 1.3, 8]}><torusGeometry args={[2.3, .12, 8, 32]} /><meshStandardMaterial color="#ffe78b" emissive="#ffb6d8" emissiveIntensity={.4} /></mesh>
     <mesh position={[0, .25, 47]} rotation={[-Math.PI / 2, 0, 0]}><ringGeometry args={[12, 20, 32]} /><meshStandardMaterial color="#fff1f9" emissive="#f7a9dc" emissiveIntensity={.2} roughness={.8} /></mesh>
   </>
