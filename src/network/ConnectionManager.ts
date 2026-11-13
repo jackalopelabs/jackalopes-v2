@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import { getDeviceId, controllerName } from '../bedtime/device';
 import entityStateObserver from './EntityStateObserver';
-import { getGameModeFromUrl, type GameMode } from '../game/game-mode';
+import { getGameModeFromUrl, shouldConnectToSharedSession, type GameMode } from '../game/game-mode';
 
 // Debug level enum
 enum LogLevel {
@@ -74,6 +74,11 @@ export class ConnectionManager extends EventEmitter {
   private lastConnectTime: number = 0; // For debouncing connect() calls
   private adventureAvatar: 'jackalope' | 'astronaut' = 'jackalope';
   private sessionJoined: boolean = false; // Only send player_update after join_success
+  // Mode picker and Everly's private realm must never join a shared session.
+  private connectionEnabled: boolean = (() => {
+    const mode = getGameModeFromUrl()
+    return shouldConnectToSharedSession(mode)
+  })()
   
   // Reconciliation metrics for debugging
   private _reconciliationMetrics = {
@@ -165,8 +170,9 @@ export class ConnectionManager extends EventEmitter {
       entityStateObserver.setDebug(this.logLevel >= LogLevel.DEBUG);
     }
     
-    // Connect after a short delay to ensure DOM is ready
-    setTimeout(() => this.connect(), 500);
+    // Direct Adventure/Hunt URLs retain automatic connect. The mode picker
+    // waits for a selection; Everly never connects at all.
+    if (this.connectionEnabled) setTimeout(() => this.connect(), 500);
   }
 
   // Helper methods for logging with different levels
@@ -249,6 +255,10 @@ export class ConnectionManager extends EventEmitter {
   }
   
   connect(): void {
+    if (!this.connectionEnabled) {
+      this.log(LogLevel.INFO, 'Connection suppressed for local-only mode');
+      return;
+    }
     try {
       // Connection storm prevention: if already connecting or connected, skip
       if (this.isConnecting) {
@@ -447,15 +457,22 @@ export class ConnectionManager extends EventEmitter {
   }
 
   setGameMode(mode: GameMode): void {
-    if (this.gameMode === mode) return;
+    const shouldConnect = shouldConnectToSharedSession(mode)
+    if (this.gameMode === mode && this.connectionEnabled === shouldConnect) return
 
-    this.disconnect();
+    // Disable before closing: socket close callbacks must not schedule a
+    // reconnect while entering Everly's local-only world.
+    this.connectionEnabled = false
+    this.disconnect()
     this.gameMode = mode;
-    this.playerType = mode === 'adventure' ? 'jackalope' : 'merc';
+    this.playerType = mode === 'adventure' || mode === 'everly' ? 'jackalope' : 'merc';
     this.playerIndex = -1;
     this.sessionJoined = false;
     this.gameState = { players: {} };
     this.lastConnectTime = 0;
+    this.reconnectAttempts = 0;
+    this.connectionEnabled = shouldConnect
+    if (shouldConnect) this.connect()
   }
 
   getGameMode(): GameMode {
@@ -1530,7 +1547,8 @@ export class ConnectionManager extends EventEmitter {
     // Clear any existing reconnect timeout
     this.clearReconnectTimeout();
     
-    // Try to reconnect
+    // Try to reconnect only while a networked mode owns the manager.
+    if (!this.connectionEnabled) return
     if (!this.offlineMode && this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
       this.reconnectTimeout = window.setTimeout(() => {

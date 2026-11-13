@@ -9,13 +9,15 @@ export const JackalopeModel = ({
   visible = true, 
   position = [0, 0, 0] as [number, number, number],
   rotation = [0, 0, 0] as [number, number, number],
-  scale = [1, 1, 1] as [number, number, number]
+  scale = [1, 1, 1] as [number, number, number],
+  everlyStyle = false
 }: {
   animation?: string;
   visible?: boolean;
   position?: [number, number, number] | THREE.Vector3;
   rotation?: [number, number, number] | THREE.Euler;
   scale?: [number, number, number];
+  everlyStyle?: boolean;
 }) => {
   const group = useRef<THREE.Group>(null);
   const [animationClips, setAnimationClips] = useState<Record<string, THREE.AnimationClip>>({});
@@ -49,6 +51,18 @@ export const JackalopeModel = ({
               if (child instanceof THREE.Mesh) {
                 child.castShadow = true;
                 child.receiveShadow = true;
+                if (everlyStyle && child.material) {
+                  const tint = (material: THREE.Material) => {
+                    const softened = material.clone() as THREE.MeshStandardMaterial;
+                    if (softened.color) softened.color.lerp(new THREE.Color('#f5cee1'), 0.82);
+                    if (softened.emissive) softened.emissive.set('#503248');
+                    if ('emissiveIntensity' in softened) softened.emissiveIntensity = 0.24;
+                    if ('metalness' in softened) softened.metalness = 0.04;
+                    if ('roughness' in softened) softened.roughness = Math.max(softened.roughness ?? 0.76, 0.76);
+                    return softened;
+                  };
+                  child.material = Array.isArray(child.material) ? child.material.map(tint) : tint(child.material);
+                }
               }
             });
             
@@ -90,7 +104,7 @@ export const JackalopeModel = ({
       console.error('Error in Jackalope model loading:', error);
       setModelError(true);
     }
-  }, []);
+  }, [everlyStyle]);
   
   // Handle animations
   useEffect(() => {
@@ -298,4 +312,4 @@ useEffect(() => {
     // ... similar handling for run
   }
 }, [animation, actions, mixer]);
-*/ 
+*/

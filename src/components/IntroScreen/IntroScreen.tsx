@@ -24,24 +24,25 @@ export const IntroScreen: React.FC<IntroScreenProps> = ({
   const backgroundColor = 'rgba(30, 41, 59, 0.9)'; // Tailwind's slate-800 with opacity
   const buttonColor = 'rgb(99, 102, 241)'; // Tailwind's indigo-500
 
-  if (gameMode === 'adventure') {
+  if (gameMode === 'adventure' || gameMode === 'everly') {
     return (
       <div className="fixed inset-0 flex items-center justify-center z-50 bg-black bg-opacity-50">
         <div className="relative w-full max-w-md rounded-2xl shadow-xl p-6 mx-4 bg-slate-900/90 backdrop-blur-xl">
           <button onClick={onClose} className="absolute top-3 right-3 text-gray-300 hover:text-white" aria-label="Close adventure instructions">
             <X size={24} />
           </button>
-          <p className="text-[10px] font-bold tracking-[0.2em] text-blue-300 mb-2">ADVENTURE MODE</p>
-          <h2 className="text-2xl font-bold mb-3 text-white">You are a jackalope</h2>
-          <p className="text-gray-200 leading-relaxed">Explore together, find hidden eggs and mushrooms, and make your own adventure. There are no teams, guns, scores, or time limit.</p>
+          <p className="text-[10px] font-bold tracking-[0.2em] text-pink-300 mb-2">{gameMode === 'everly' ? "EVERLY'S ADVENTURE" : 'ADVENTURE MODE'}</p>
+          <h2 className="text-2xl font-bold mb-3 text-white">{gameMode === 'everly' ? 'Welcome to your magical world!' : 'You are a jackalope'}</h2>
+          <p className="text-gray-200 leading-relaxed">{gameMode === 'everly' ? 'Meet unicorns, pick out rainbow flowers, swim with colorful fish, follow the cloud path, and open the castle doors. Take your time and explore!' : 'Explore together, find hidden eggs and mushrooms, and make your own adventure. There are no teams, guns, scores, or time limit.'}</p>
           <div className="mt-5 text-xs text-gray-300 grid grid-cols-2 gap-1">
             <div>WASD</div><div>Movement</div>
             <div>Space</div><div>Jump</div>
             <div>Shift</div><div>Sprint</div>
             <div>Mouse</div><div>Look around</div>
+            {gameMode === 'everly' && <><div>F / X / Use</div><div>Open castle doors</div><div>C / L2</div><div>Dive underwater</div></>}
           </div>
           <button onClick={onClose} className="mt-6 w-full px-6 py-3 rounded-xl text-white font-bold bg-blue-500 hover:bg-blue-400 transition-colors">
-            Start exploring
+            {gameMode === 'everly' ? 'Let’s explore!' : 'Start exploring'}
           </button>
         </div>
       </div>

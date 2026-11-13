@@ -66,7 +66,9 @@ import { MercDrone } from './game/MercDrone';
 import { GameModeMenu } from './components/GameModeMenu';
 import { SwimmingHUD } from './components/SwimmingHUD';
 import { AdventureHUD } from './components/AdventureHUD';
-import { getGameModeFromUrl, type GameMode } from './game/game-mode';
+import { getGameModeFromUrl, shouldReloadForModeEntry, type GameMode } from './game/game-mode';
+import { EverlyAdventure, EverlyAdventureHUD } from './game/EverlyAdventure';
+import { everlyWaterSurfaceAt } from './game/everly-adventure';
 import { consumeTouchLookDelta } from './common/touch-input';
 import { getActiveGamepad } from './common/hooks/use-gamepad';
 
@@ -1820,7 +1822,8 @@ export function App() {
     const initialGameMode = useMemo(() => getGameModeFromUrl(), []);
     const [gameMode, setGameMode] = useState<GameMode | null>(initialGameMode);
     const [showGameModeMenu, setShowGameModeMenu] = useState(initialGameMode === null);
-    const adventureMode = gameMode === 'adventure';
+    const everlyMode = gameMode === 'everly';
+    const adventureMode = gameMode === 'adventure' || everlyMode;
     const [lushGrove, setLushGrove] = useState(() => {
         try { return localStorage.getItem(GROVE_STORAGE_KEY) !== 'off'; } catch { return true; }
     });
@@ -2251,7 +2254,7 @@ export function App() {
     }, [isHost, connectionManager]);
 
     // Add multiplayer controls to Leva panel and track its state change
-    const { enableMultiplayer } = useControls('Multiplayer', {
+    const { enableMultiplayer: multiplayerPreference } = useControls('Multiplayer', {
         enableMultiplayer: {
             value: true,
             label: 'Enable Connection'
@@ -2260,6 +2263,7 @@ export function App() {
         collapsed: true,
         order: 997
     });
+    const enableMultiplayer = multiplayerPreference && !everlyMode;
 
     // Play again handler (needs enableMultiplayer + connectionManager)
     const handlePlayAgain = useCallback(() => {
@@ -2744,7 +2748,7 @@ export function App() {
     }, []);
     
     const [playerCharacterInfo, _setPlayerCharacterInfo] = useState<{ type: 'merc' | 'jackalope', thirdPerson: boolean }>(() => {
-        if (initialGameMode === 'adventure') {
+        if (initialGameMode === 'adventure' || initialGameMode === 'everly') {
             return { type: 'jackalope', thirdPerson: true };
         }
         if (urlRole) {
@@ -2775,15 +2779,25 @@ export function App() {
 
         const url = new URL(window.location.href);
         url.searchParams.set('mode', nextMode);
-        if (nextMode === 'adventure') {
+        if (nextMode === 'adventure' || nextMode === 'everly') {
             url.searchParams.delete('role');
+        }
+        // Adventure's terrain is initialized before scene construction. Reload
+        // on entry from the picker/another mode so the latest shared map cannot
+        // arrive after Platforms has memoized a stale local copy.
+        if (shouldReloadForModeEntry(nextMode, gameMode)) {
+            window.location.assign(url.href);
+            return;
         }
         window.history.replaceState({}, '', url);
 
+        // The manager gates Everly's network lifecycle and cancels any prior
+        // Adventure reconnect/keepalive ownership on this transition.
         connectionManager.setGameMode(nextMode);
+        if (nextMode === 'adventure') window.dispatchEvent(new CustomEvent('jackalopes:adventure-selected'));
         serverAssignedType.current = false;
 
-        const nextType = nextMode === 'adventure' ? 'jackalope' : (urlRole || 'jackalope');
+        const nextType = nextMode === 'adventure' || nextMode === 'everly' ? 'jackalope' : (urlRole || 'jackalope');
         _setPlayerCharacterInfo({ type: nextType, thirdPerson: nextType === 'jackalope' });
         setGameMode(nextMode);
         setShowGameModeMenu(false);
@@ -2795,7 +2809,8 @@ export function App() {
         window.dispatchEvent(new CustomEvent('jackalopesGameModeChanged', {
             detail: { mode: nextMode, timestamp: Date.now() }
         }));
-    }, [connectionManager, urlRole]);
+        window.dispatchEvent(new CustomEvent('jackalopes:mode-selected', { detail: { mode: nextMode } }));
+    }, [connectionManager, gameMode, urlRole]);
     
     // Server-synced match timer
     const [matchTimerData, setMatchTimerData] = useState<{ matchStartTime: number, matchDuration: number, serverTime: number } | null>(null);
@@ -2901,28 +2916,29 @@ export function App() {
     const jackalopeNightVisionActive = greenNightVisionActive && playerCharacterInfo.type === 'jackalope';
     const NIGHT_VISION_PROGRESS = 0.68;
     // Exploration stays at an intentional twilight; Hunt keeps its timed darkness.
-    const normalAdventure = adventureMode && !jackalopeNightVisionActive;
-    const visualLightingProgress = jackalopeNightVisionActive ? NIGHT_VISION_PROGRESS : (adventureMode ? 0.42 : introLightingProgress);
+    const normalAdventure = adventureMode && !everlyMode && !jackalopeNightVisionActive;
+    const visualLightingProgress = everlyMode ? 0 : jackalopeNightVisionActive ? NIGHT_VISION_PROGRESS : (adventureMode ? 0.42 : introLightingProgress);
     const nightVisionTintStrength = jackalopeNightVisionActive ? 0.52 : 0;
 
     const dynamicFogColor = useMemo(() => {
+        if (everlyMode) return '#f5d9ec';
         if (normalAdventure) return '#142d39';
         if (!forceDarkLevel) return darkMode ? '#111111' : fogColor;
         const baseColor = new THREE.Color('#4b3f52').lerp(new THREE.Color('#050a14'), visualLightingProgress);
         if (!jackalopeNightVisionActive) return `#${baseColor.getHexString()}`;
         return `#${baseColor.lerp(new THREE.Color('#173624'), nightVisionTintStrength).getHexString()}`;
-    }, [normalAdventure, forceDarkLevel, darkMode, fogColor, jackalopeNightVisionActive, nightVisionTintStrength, visualLightingProgress]);
+    }, [everlyMode, normalAdventure, forceDarkLevel, darkMode, fogColor, jackalopeNightVisionActive, nightVisionTintStrength, visualLightingProgress]);
 
-    const dynamicFogNear = normalAdventure ? 70 : forceDarkLevel
+    const dynamicFogNear = everlyMode ? 85 : normalAdventure ? 70 : forceDarkLevel
         ? THREE.MathUtils.lerp(Math.max(0, fogNear * 0.9), fogNear * 0.5, visualLightingProgress)
         : (darkMode ? fogNear : fogNear);
 
-    const dynamicFogFar = normalAdventure ? 340 : forceDarkLevel
+    const dynamicFogFar = everlyMode ? 420 : normalAdventure ? 340 : forceDarkLevel
         ? THREE.MathUtils.lerp(Math.max(fogFar * 0.7, fogNear + 1), fogFar * 0.3, visualLightingProgress)
         : (darkMode ? (fogFar * 0.5) : fogFar);
 
-    const dynamicEnvironmentPreset = forceDarkLevel && visualLightingProgress < 0.98 ? 'sunset' : (forceDarkLevel ? 'night' : 'sunset');
-    const dynamicEnvironmentBlur = forceDarkLevel
+    const dynamicEnvironmentPreset = everlyMode ? 'sunset' : forceDarkLevel && visualLightingProgress < 0.98 ? 'sunset' : (forceDarkLevel ? 'night' : 'sunset');
+    const dynamicEnvironmentBlur = everlyMode ? 0.8 : forceDarkLevel
         ? THREE.MathUtils.lerp(0.28, 0.8, visualLightingProgress)
         : 0.4;
 
@@ -2945,27 +2961,28 @@ export function App() {
         ? THREE.MathUtils.lerp(95, 150, visualLightingProgress)
         : (darkMode ? 120 : 100);
 
-    const dynamicAmbientIntensity = normalAdventure ? 0.2 : forceDarkLevel
+    const dynamicAmbientIntensity = everlyMode ? 0.82 : normalAdventure ? 0.2 : forceDarkLevel
         ? THREE.MathUtils.lerp(0.26, 0.005, visualLightingProgress) * (jackalopeNightVisionActive ? 0.12 : 1)
         : (darkMode ? 0.02 : ambientIntensity);
 
-    const dynamicDirectionalIntensity = normalAdventure ? 1.65 : forceDarkLevel
+    const dynamicDirectionalIntensity = everlyMode ? 1.45 : normalAdventure ? 1.65 : forceDarkLevel
         ? THREE.MathUtils.lerp(Math.max(2.8, directionalIntensity * 1.15), 0.02, visualLightingProgress) * (jackalopeNightVisionActive ? 0.11 : 1)
         : (darkMode ? 0.1 : directionalIntensity);
 
     const dynamicDirectionalColor = useMemo(() => {
+        if (everlyMode) return '#fff4fb';
         if (normalAdventure) return '#efcda5';
         if (!forceDarkLevel) return '#fff';
         const baseColor = new THREE.Color('#ffb46b').lerp(new THREE.Color('#5577aa'), visualLightingProgress);
         if (!jackalopeNightVisionActive) return `#${baseColor.getHexString()}`;
         return `#${baseColor.lerp(new THREE.Color('#9eff9f'), 0.7).getHexString()}`;
-    }, [normalAdventure, forceDarkLevel, jackalopeNightVisionActive, visualLightingProgress]);
+    }, [everlyMode, normalAdventure, forceDarkLevel, jackalopeNightVisionActive, visualLightingProgress]);
 
-    const dynamicBloomIntensity = normalAdventure ? 0.3 : forceDarkLevel
+    const dynamicBloomIntensity = everlyMode ? 0.18 : normalAdventure ? 0.3 : forceDarkLevel
         ? THREE.MathUtils.lerp(bloomIntensity * 0.9, bloomIntensity * 4.0, visualLightingProgress) * (jackalopeNightVisionActive ? 0.08 : 1)
         : (darkMode ? bloomIntensity * 2.0 : bloomIntensity);
 
-    const dynamicBloomThreshold = normalAdventure ? 0.8 : forceDarkLevel
+    const dynamicBloomThreshold = everlyMode ? 0.88 : normalAdventure ? 0.8 : forceDarkLevel
         ? THREE.MathUtils.lerp(0.18, 0.01, visualLightingProgress)
         : (darkMode ? 0.03 : bloomLuminanceThreshold);
 
@@ -2973,23 +2990,23 @@ export function App() {
         ? THREE.MathUtils.lerp(0.85, 0.5, visualLightingProgress)
         : (darkMode ? 0.7 : 0.9);
 
-    const dynamicVignetteOffset = normalAdventure ? 0.35 : forceDarkLevel
+    const dynamicVignetteOffset = everlyMode ? 0 : normalAdventure ? 0.35 : forceDarkLevel
         ? THREE.MathUtils.lerp(0.28, 0.0, visualLightingProgress)
         : (darkMode ? 0.1 : vignetteOffset);
 
-    const dynamicVignetteDarkness = normalAdventure ? 0.32 : forceDarkLevel
+    const dynamicVignetteDarkness = everlyMode ? 0 : normalAdventure ? 0.32 : forceDarkLevel
         ? THREE.MathUtils.lerp(0.24, 0.98, visualLightingProgress) + (jackalopeNightVisionActive ? 0.18 : 0)
         : (darkMode ? 0.95 : vignetteDarkness);
 
-    const dynamicChromaticAberration = normalAdventure ? 0.0002 : forceDarkLevel
+    const dynamicChromaticAberration = everlyMode ? 0 : normalAdventure ? 0.0002 : forceDarkLevel
         ? THREE.MathUtils.lerp(chromaticAberrationOffset * 0.75, chromaticAberrationOffset * 2, visualLightingProgress) * (jackalopeNightVisionActive ? 0.6 : 1)
         : chromaticAberrationOffset;
 
-    const dynamicBrightness = normalAdventure ? -0.035 : forceDarkLevel
+    const dynamicBrightness = everlyMode ? 0.015 : normalAdventure ? -0.035 : forceDarkLevel
         ? THREE.MathUtils.lerp(0.02, -0.95, visualLightingProgress) - (jackalopeNightVisionActive ? 0.52 : 0)
         : (darkMode ? -0.9 : brightness);
 
-    const dynamicContrast = normalAdventure ? 0.1 : forceDarkLevel
+    const dynamicContrast = everlyMode ? 0.04 : normalAdventure ? 0.1 : forceDarkLevel
         ? THREE.MathUtils.lerp(0.02, 0.6, visualLightingProgress) + (jackalopeNightVisionActive ? 0.08 : 0)
         : (darkMode ? 0.4 : contrast);
 
@@ -4592,20 +4609,20 @@ export function App() {
             {/* {showModelTester && <ModelTester />} */}
 
             <Canvas shadows={adventureMode && graphicsQuality !== 'low'} dpr={graphicsQuality === 'low' ? 1 : [1, 1.5]} gl={{ antialias: graphicsQuality !== 'low', powerPreference: 'default' }}>
-                <CaveAtmosphereProvider enabled={adventureMode} nightVision={jackalopeNightVisionActive}>
+                <CaveAtmosphereProvider enabled={adventureMode && !everlyMode} nightVision={jackalopeNightVisionActive}>
                 {fogEnabled && <fog attach="fog" args={[dynamicFogColor, dynamicFogNear, dynamicFogFar]} />}
-                {!compatibilityMode && <Environment
+                {!compatibilityMode && !everlyMode && <Environment
                     preset={adventureMode ? 'night' : dynamicEnvironmentPreset}
                     background={!adventureMode}
                     blur={dynamicEnvironmentBlur}
                     resolution={globalQualityParams.environmentResolution} // Use quality-based resolution
                 />}
 
-                {adventureMode && <AdventureAtmosphere motes={graphicsQuality !== 'low'} />}
-                {adventureMode && <AdventureLighting lightRef={directionalLightRef} nightVision={jackalopeNightVisionActive} />}
+                {adventureMode && !everlyMode && <AdventureAtmosphere motes={graphicsQuality !== 'low'} />}
+                {adventureMode && !everlyMode && <AdventureLighting lightRef={directionalLightRef} nightVision={jackalopeNightVisionActive} />}
 
                 {/* Add stars to night sky */}
-                {(starsEnabled || darkMode || forceDarkLevel) && <Stars
+                {!everlyMode && (starsEnabled || darkMode || forceDarkLevel) && <Stars
                     count={adventureMode ? 260 : dynamicStarsCount}
                     size={adventureMode ? 0.09 : dynamicStarsSize}
                     color={adventureMode ? '#b5cbd8' : dynamicStarsColor}
@@ -4738,10 +4755,11 @@ export function App() {
                                     adventureMode={adventureMode}
                                     adventureAvatar={adventureAvatar}
                                     ref={playerRef}
-                                    position={[-100, 7, 10]} // Different spawn position for jackalope
+                                    position={everlyMode ? [-42, 3, 25] : [-100, 7, 10]}
                                     walkSpeed={0.56}
                                     runSpeed={1.0}
                                     jumpForce={jumpForce * 0.8}
+                                    isolatedWaterSurfaceAt={everlyMode ? everlyWaterSurfaceAt : undefined}
                                     visible={adventureMode || thirdPersonView}
                                     thirdPersonView={adventureMode || thirdPersonView}
                                     connectionManager={enableMultiplayer ? connectionManager : undefined}
@@ -4754,15 +4772,15 @@ export function App() {
                             )
                         )}
                     </PlayerControls>
-                    {adventureMode && <AdventureCombat connectionManager={connectionManager} astronaut={adventureAvatar === 'astronaut'} playerRef={playerRef} />}
-                    <Platforms quality={graphicsQuality} adventureStyle={adventureMode} holographicVision={goldenVisionActive} />
-                    {adventureMode && lushGrove && !compatibilityMode && <FoliageGrove quality={graphicsQuality} />}
+                    {adventureMode && !everlyMode && <AdventureCombat connectionManager={connectionManager} astronaut={adventureAvatar === 'astronaut'} playerRef={playerRef} />}
+                    {everlyMode ? <EverlyAdventure /> : <Platforms quality={graphicsQuality} adventureStyle={adventureMode} holographicVision={goldenVisionActive} />}
+                    {adventureMode && !everlyMode && lushGrove && !compatibilityMode && <FoliageGrove quality={graphicsQuality} />}
                     <HolographicVision active={goldenVisionActive} />
-                    {adventureMode && <GoldenMushroom onEat={() => setGoldenVisionUntil(Date.now() + GOLDEN_VISION_DURATION_MS)} />}
-                    {adventureMode && <CloudPath />}
+                    {adventureMode && !everlyMode && <GoldenMushroom onEat={() => setGoldenVisionUntil(Date.now() + GOLDEN_VISION_DURATION_MS)} />}
+                    {adventureMode && !everlyMode && <CloudPath />}
 
                     {/* Mushroom field - visible to all players, but only jackalopes can eat them */}
-                    <MushroomField
+                    {!everlyMode && <MushroomField
                         onMushroomEaten={(id) => {
                             console.log(`[APP] Mushroom ${id} was eaten!`);
                             // Could add score/power-up logic here in the future
@@ -4770,33 +4788,33 @@ export function App() {
                         onGoldenTrailDecoySpawned={(id) => {
                             console.log(`[APP] Golden trail decoy ${id} spawned`)
                         }}
-                    />
+                    />}
 
                     {/* Golden easter egg hunt - random hidden collectibles for future jackalope magic */}
-                    <GoldenEggField
+                    {!everlyMode && <GoldenEggField
                         eggCount={7}
                         onEggEaten={(id) => {
                             console.log(`[APP] Golden egg ${id} was eaten!`)
                             setGoldenEggCount(prev => prev + 1)
                             window.dispatchEvent(new CustomEvent('golden_egg_trail_start'))
                         }}
-                    />
+                    />}
 
-                    <RainbowEggField
+                    {!everlyMode && <RainbowEggField
                         eggCount={4}
                         onEggEaten={(id) => {
                             console.log(`[APP] Rainbow egg ${id} was eaten!`)
                             setRainbowEggCount(prev => prev + 1)
                         }}
-                    />
+                    />}
 
-                    <GreenEggField
+                    {!everlyMode && <GreenEggField
                         eggCount={3}
                         onEggEaten={(id) => {
                             console.log(`[APP] Green egg ${id} was eaten!`)
                             setGreenNightVisionActive(true)
                         }}
-                    />
+                    />}
 
                     <Scene playerRef={playerRef} enabled={!adventureMode} />
 
@@ -5094,7 +5112,7 @@ export function App() {
 
             <SwimmingHUD />
             {goldenVisionActive && <HolographicSenseHUD until={goldenVisionUntil} />}
-            {adventureMode ? (
+            {adventureMode && !everlyMode ? (
                 <AdventureHUD
                     avatar={adventureAvatar}
                     onToggleAvatar={toggleAdventureAvatar}
@@ -5108,6 +5126,8 @@ export function App() {
                         window.location.href = '/?mode=adventure&editor=terrain';
                     }}
                 />
+            ) : everlyMode ? (
+                <EverlyAdventureHUD avatar={adventureAvatar} onToggleAvatar={toggleAdventureAvatar} />
             ) : gameMode === 'hunt' ? (
                 <GameHUD
                     jackalopesScore={jackalopesScore}
@@ -5131,12 +5151,12 @@ export function App() {
             {/* Kill feed */}
             {!adventureMode && <KillFeed />}
 
-            <AudioCommsPanel
+            {!everlyMode && <AudioCommsPanel
                 connectionManager={connectionManager}
                 enabled={true}
                 playerType={adventureMode ? 'jackalope' : playerCharacterInfo.type}
                 position={showVirtualGamepad ? 'top-right' : 'bottom-right'}
-            />
+            />}
 
             {/* Jackalope Player Count - Top Left */}
             {!adventureMode && <PlayerCountDisplay playerType="jackalope" position="left" />}
@@ -5161,7 +5181,7 @@ export function App() {
                 />
             )}
 
-            <RespawnButton connectionManager={connectionManager} />
+            {!everlyMode && <RespawnButton connectionManager={connectionManager} />}
 
             {/* Merc flashblind overlay from rainbow egg flashbang */}
             {!adventureMode && playerCharacterInfo.type === 'merc' && mercFlashblindUntil > Date.now() && (

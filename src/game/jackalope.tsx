@@ -100,6 +100,7 @@ type JackalopeProps = RigidBodyProps & {
     thirdPersonView?: boolean
     adventureAvatar?: 'jackalope' | 'astronaut'
     adventureMode?: boolean
+    isolatedWaterSurfaceAt?: (x: number, y: number, z: number, wasSwimming: boolean) => number | null
 }
 
 // Keyboard controls type
@@ -123,6 +124,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
     thirdPersonView = false,
     adventureMode = false,
     adventureAvatar = 'jackalope', 
+    isolatedWaterSurfaceAt,
     ...props 
 }, ref) => {
     // Core references
@@ -187,13 +189,14 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
     const camera = useThree((state) => state.camera)
     const [, getKeyboardControls] = useKeyboardControls()
     const gamepadState = useGamepad()
-    const sampleSwimming = useSwimming(adventureMode)
+    const sampleSwimming = useSwimming(adventureMode, isolatedWaterSurfaceAt)
     const wasSwimming = useRef(false)
     const slideLayouts = useMemo(() => {
-        if (!adventureMode) return []
+        // Everly's isolated realm must not even read the shared saved map.
+        if (!adventureMode || isolatedWaterSurfaceAt) return []
         const level = loadTerrainLevel()
         return [createWaterslide(level), createSpiralWaterslide(level)]
-    }, [adventureMode])
+    }, [adventureMode, isolatedWaterSurfaceAt])
     const slideRide = useRef<{ layout: WaterslideLayout; progress: number; elapsed: number; origin: THREE.Vector3 } | null>(null)
     const slideInteractHeld = useRef(false)
     useEffect(() => () => { slideRide.current = null; waterslideState.active = false; lifeguardMotion.enabled = false }, [adventureMode])
@@ -384,7 +387,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
     }, [connectionManager, adventureMode]);
 
     useEffect(() => {
-        if (!adventureMode) return
+        if (!adventureMode || isolatedWaterSurfaceAt) return
         let timer: ReturnType<typeof setTimeout> | undefined
         const caught = () => {
             if (Date.now() < sharkPlayerState.immuneUntil || slideRide.current || !wasSwimming.current) return
@@ -413,7 +416,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
             if (timer) clearTimeout(timer)
             sharkPlayerState.caughtUntil = 0
         }
-    }, [adventureMode, handleRespawn, connectionManager])
+    }, [adventureMode, handleRespawn, connectionManager, isolatedWaterSurfaceAt])
     
     useEffect(() => {
         // Add event listener
@@ -1110,10 +1113,11 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
                 >
                     <group ref={jackalopeLeanRef}>
                         {adventureMode && adventureAvatar === 'astronaut' ? <group name="adventure-astronaut">
-                            <MercModel adventureStyle flinchUntil={flinchUntil} animation={animation} scale={[1.8, 1.8, 1.8]} />
+                            <MercModel adventureStyle everlyStyle={!!isolatedWaterSurfaceAt} flinchUntil={flinchUntil} animation={animation} scale={[1.8, 1.8, 1.8]} />
                         </group> : <JackalopeModel
                             animation={animation}
                             visible={visible}
+                            everlyStyle={!!isolatedWaterSurfaceAt}
                             // Note: we don't pass position/rotation as props anymore
                             // The parent group will be manipulated directly in useFrame
                         />}

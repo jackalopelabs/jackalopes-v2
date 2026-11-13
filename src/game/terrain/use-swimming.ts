@@ -7,8 +7,8 @@ export const SWIMMING_EVENT = 'jackalopes:swimming'
 export type SwimmingStatus = { swimming: boolean; underwater: boolean; gamepad: boolean }
 
 // The level is installed before the game mounts. Shared map updates reload the world.
-export function useSwimming(adventureCaves = false) {
-  const level = useMemo(() => loadTerrainLevel(), [])
+export function useSwimming(adventureCaves = false, isolatedSurface?: (x: number, y: number, z: number, wasSwimming: boolean) => number | null) {
+  const level = useMemo(() => isolatedSurface ? null : loadTerrainLevel(), [isolatedSurface])
   const status = useRef<SwimmingStatus>({ swimming: false, underwater: false, gamepad: false })
   useEffect(() => () => {
     window.dispatchEvent(new CustomEvent(SWIMMING_EVENT, {
@@ -17,8 +17,12 @@ export function useSwimming(adventureCaves = false) {
   }, [])
 
   return (position: { x: number; y: number; z: number }, cameraY: number, gamepad: boolean) => {
-    const caveWater = adventureCaves ? caveWaterSurfaceAt(level, position.x, position.y, position.z, status.current.swimming) : null
-    const surface = caveWater ?? sampleSwimWater(level, position.x, position.y, position.z, status.current.swimming)
+    const surface = isolatedSurface
+      ? isolatedSurface(position.x, position.y, position.z, status.current.swimming)
+      : level
+        ? (adventureCaves ? caveWaterSurfaceAt(level, position.x, position.y, position.z, status.current.swimming) : null)
+          ?? sampleSwimWater(level, position.x, position.y, position.z, status.current.swimming)
+        : null
     const next = { swimming: surface !== null, underwater: surface !== null && cameraY < surface - 0.1, gamepad }
     if (Object.keys(next).some(key => next[key as keyof SwimmingStatus] !== status.current[key as keyof SwimmingStatus])) {
       status.current = next

@@ -29,7 +29,7 @@
 
 .game-mode-menu__content {
   position: relative;
-  width: min(940px, 100%);
+  width: min(1180px, 100%);
   text-align: center;
 }
 
@@ -48,7 +48,7 @@
 .game-mode-menu__eyebrow { margin: 0 0 7px; color: #94a3b8; font-size: 12px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; }
 .game-mode-menu h1 { margin: 0 0 30px; font-size: clamp(34px, 5vw, 58px); line-height: 1; letter-spacing: -0.045em; }
 
-.game-mode-menu__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.game-mode-menu__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 
 .game-mode-card {
   position: relative;
@@ -77,6 +77,11 @@
 .game-mode-card__glow { position: absolute; inset: auto -30% -50% -30%; height: 70%; filter: blur(70px); opacity: 0.15; pointer-events: none; }
 .game-mode-card--adventure .game-mode-card__glow { background: #3b82f6; }
 .game-mode-card--hunt .game-mode-card__glow { background: #f97316; }
+.game-mode-card--everly .game-mode-card__glow { background: linear-gradient(90deg,#ff6aa9,#ffd768,#78e7ca,#a18aff); }
+.game-mode-card--everly:hover, .game-mode-card--everly:focus-visible, .game-mode-card--everly.is-current { border-color: rgba(255,151,207,.5); box-shadow: 0 26px 90px rgba(219,75,162,.2); }
+.game-mode-card--everly.is-selected { border-color: rgba(255,181,221,.82); background: rgba(227,95,171,.13); box-shadow: 0 0 0 3px rgba(255,151,207,.17), 0 26px 90px rgba(219,75,162,.25); }
+.game-mode-card--everly .game-mode-card__icon, .game-mode-card--everly .game-mode-card__label, .game-mode-card--everly .game-mode-card__action { color: #ffc0e3; }
+.game-mode-card__icon--rainbow { background: linear-gradient(135deg,rgba(255,109,174,.2),rgba(158,130,255,.24),rgba(105,220,224,.18)); }
 .game-mode-card__icon { display: grid; width: 58px; height: 58px; place-items: center; margin-bottom: 28px; border-radius: 17px; background: rgba(255,255,255,0.075); }
 .game-mode-card--adventure .game-mode-card__icon, .game-mode-card--adventure .game-mode-card__label { color: #93c5fd; }
 .game-mode-card--hunt .game-mode-card__icon, .game-mode-card--hunt .game-mode-card__label { color: #fdba74; }
@@ -110,7 +115,7 @@
 .game-mode-switch {
   position: fixed;
   top: 58px;
-  left: 15px;
+  right: 15px;
   z-index: 2100;
   display: inline-flex;
   align-items: center;

@@ -14,6 +14,7 @@ export const MercModel = ({
   scale = [1, 1, 1] as [number, number, number],
   thermalActive = false,
   adventureStyle = false,
+  everlyStyle = false,
   flinchUntil = 0,
 }: {
   animation?: string;
@@ -23,6 +24,7 @@ export const MercModel = ({
   scale?: [number, number, number];
   thermalActive?: boolean;
   adventureStyle?: boolean;
+  everlyStyle?: boolean;
   /** Local Date.now() deadline; a hit normally sets this to Date.now() + 350. */
   flinchUntil?: number;
 }) => {
@@ -261,10 +263,17 @@ export const MercModel = ({
           material.emissiveMap = null;
           material.emissiveIntensity = 0.12;
         }
+        if (everlyStyle && !thermalActive) {
+          if (material.color) material.color.set('#f4cfe1');
+          if (material.emissive) material.emissive.set('#503248');
+          material.emissiveIntensity = 0.24;
+          if (typeof material.metalness === 'number') material.metalness = 0.04;
+          if (typeof material.roughness === 'number') material.roughness = 0.76;
+        }
         material.needsUpdate = true;
       });
     });
-  }, [modelLoaded, thermalActive, adventureStyle]);
+  }, [modelLoaded, thermalActive, adventureStyle, everlyStyle]);
   
   // If there was an error loading the model, show a simplified version as fallback
   if (modelError) {

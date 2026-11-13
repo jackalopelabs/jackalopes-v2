@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Compass, Crosshair, Timer, Users, X } from 'lucide-react';
+import { Compass, Crosshair, Sparkles, Timer, Users, X } from 'lucide-react';
 import type { GameMode } from '../game/game-mode';
 import { getActiveGamepad } from '../common/hooks/use-gamepad';
 import './GameModeMenu.css';
@@ -20,6 +20,7 @@ const JackalopeMark = () => (
 
 export const GameModeMenu = ({ currentMode, visible, onOpen, onClose, onSelect }: GameModeMenuProps) => {
   const [selectedMode, setSelectedMode] = useState<GameMode>(currentMode || 'adventure');
+  const modes: GameMode[] = ['adventure', 'hunt', 'everly'];
   const previousInput = useRef({ navigate: false, accept: false, back: false, menu: false });
 
   useEffect(() => {
@@ -47,7 +48,7 @@ export const GameModeMenu = ({ currentMode, visible, onOpen, onClose, onSelect }
 
         if (visible) {
           if (navigate && !previousInput.current.navigate) {
-            setSelectedMode(mode => mode === 'adventure' ? 'hunt' : 'adventure');
+            setSelectedMode(mode => modes[(modes.indexOf(mode) + 1) % modes.length]);
           }
           if (accept && !previousInput.current.accept) {
             onSelect(selectedMode);
@@ -72,8 +73,8 @@ export const GameModeMenu = ({ currentMode, visible, onOpen, onClose, onSelect }
   return <>
     {currentMode && !visible && (
       <button className="game-mode-switch" onClick={onOpen} type="button">
-        {currentMode === 'adventure' ? <Compass size={15} /> : <Crosshair size={15} />}
-        <span>{currentMode === 'adventure' ? 'Adventure' : 'Hunt'}</span>
+        {currentMode === 'adventure' ? <Compass size={15} /> : currentMode === 'everly' ? <Sparkles size={15} /> : <Crosshair size={15} />}
+        <span>{currentMode === 'everly' ? "Everly's Adventure" : currentMode === 'adventure' ? 'Adventure' : 'Hunt'}</span>
         <kbd>M / MENU</kbd>
       </button>
     )}
@@ -114,6 +115,25 @@ export const GameModeMenu = ({ currentMode, visible, onOpen, onClose, onSelect }
                 <span><Compass size={15} /> No competition</span>
               </span>
               <span className="game-mode-card__action">Start Adventure</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="game-mode-everly"
+              className={`game-mode-card game-mode-card--everly${currentMode === 'everly' ? ' is-current' : ''}${selectedMode === 'everly' ? ' is-selected' : ''}`}
+              onClick={() => onSelect('everly')}
+              onPointerEnter={() => setSelectedMode('everly')}
+            >
+              <span className="game-mode-card__glow" />
+              <span className="game-mode-card__icon game-mode-card__icon--rainbow"><Sparkles size={30} /></span>
+              <span className="game-mode-card__label">A WORLD OF HER OWN</span>
+              <strong>Everly&apos;s Adventure</strong>
+              <span className="game-mode-card__description">Meet rainbow unicorns, follow clouds, swim with colorful fish, and open the pink castle doors.</span>
+              <span className="game-mode-card__facts">
+                <span><Sparkles size={15} /> Gentle exploring</span>
+                <span><Compass size={15} /> Just for Everly</span>
+              </span>
+              <span className="game-mode-card__action">Enter Everly&apos;s World</span>
             </button>
 
             <button
