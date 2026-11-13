@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Compass, Crosshair, Sparkles, Timer, Users, X } from 'lucide-react';
-import type { GameMode } from '../game/game-mode';
+import { canShowEverlyRestartAction, type GameMode } from '../game/game-mode';
 import { getActiveGamepad } from '../common/hooks/use-gamepad';
 import './GameModeMenu.css';
 
@@ -10,6 +10,7 @@ interface GameModeMenuProps {
   onOpen: () => void;
   onClose: () => void;
   onSelect: (mode: GameMode) => void;
+  onRestartEverly?: () => void;
 }
 
 const JackalopeMark = () => (
@@ -18,7 +19,7 @@ const JackalopeMark = () => (
   </svg>
 );
 
-export const GameModeMenu = ({ currentMode, visible, onOpen, onClose, onSelect }: GameModeMenuProps) => {
+export const GameModeMenu = ({ currentMode, visible, onOpen, onClose, onSelect, onRestartEverly }: GameModeMenuProps) => {
   const [selectedMode, setSelectedMode] = useState<GameMode>(currentMode || 'adventure');
   const modes: GameMode[] = ['adventure', 'hunt', 'everly'];
   const previousInput = useRef({ navigate: false, accept: false, back: false, menu: false });
@@ -128,7 +129,7 @@ export const GameModeMenu = ({ currentMode, visible, onOpen, onClose, onSelect }
               <span className="game-mode-card__icon game-mode-card__icon--rainbow"><Sparkles size={30} /></span>
               <span className="game-mode-card__label">A WORLD OF HER OWN</span>
               <strong>Everly&apos;s Adventure</strong>
-              <span className="game-mode-card__description">Meet rainbow unicorns, follow clouds, swim with colorful fish, and open the pink castle doors.</span>
+              <span className="game-mode-card__description">Play as a rainbow unicorn. Follow clouds, swim with colorful fish, and open the pink castle doors.</span>
               <span className="game-mode-card__facts">
                 <span><Sparkles size={15} /> Gentle exploring</span>
                 <span><Compass size={15} /> Just for Everly</span>
@@ -156,6 +157,7 @@ export const GameModeMenu = ({ currentMode, visible, onOpen, onClose, onSelect }
           </div>
 
           <p className="game-mode-menu__hint"><span>Left stick / D-pad to choose</span><span>A to select</span><span>Menu anytime to change modes</span></p>
+          {canShowEverlyRestartAction(currentMode, visible) && onRestartEverly && <button type="button" data-testid="everly-restart" onClick={onRestartEverly} style={{ display: 'block', margin: '16px auto 0', border: '1px solid #f0b3d6', borderRadius: 12, padding: '10px 16px', color: '#79335f', background: '#fff0f8', fontWeight: 800, cursor: 'pointer' }}>Start Everly&apos;s Adventure over</button>}
         </main>
       </div>
     )}

@@ -66,8 +66,8 @@ import { MercDrone } from './game/MercDrone';
 import { GameModeMenu } from './components/GameModeMenu';
 import { SwimmingHUD } from './components/SwimmingHUD';
 import { AdventureHUD } from './components/AdventureHUD';
-import { getGameModeFromUrl, shouldReloadForModeEntry, type GameMode } from './game/game-mode';
-import { EverlyAdventure, EverlyAdventureHUD } from './game/EverlyAdventure';
+import { getAdventurePlayerAppearance, getGameModeFromUrl, shouldReloadForModeEntry, type GameMode } from './game/game-mode';
+import { EverlyAdventure } from './game/EverlyAdventure';
 import { everlyWaterSurfaceAt } from './game/everly-adventure';
 import { consumeTouchLookDelta } from './common/touch-input';
 import { getActiveGamepad } from './common/hooks/use-gamepad';
@@ -1912,9 +1912,11 @@ export function App() {
     const [rainbowEggCount, setRainbowEggCount] = useState(0);
     const [greenNightVisionActive, setGreenNightVisionActive] = useState(false);
     const [goldenVisionUntil, setGoldenVisionUntil] = useState(0);
-    const [adventureAvatar, setAdventureAvatar] = useState<'jackalope' | 'astronaut'>(() => {
+    const [savedAdventureAvatar, setAdventureAvatar] = useState<'jackalope' | 'astronaut'>(() => {
         try { return localStorage.getItem('jackalopes.adventure-avatar') === 'astronaut' ? 'astronaut' : 'jackalope'; } catch { return 'jackalope'; }
     });
+    const playerAppearance = getAdventurePlayerAppearance(gameMode, savedAdventureAvatar);
+    const adventureAvatar = playerAppearance === 'astronaut' ? 'astronaut' : 'jackalope';
     const toggleAdventureAvatar = () => setAdventureAvatar(previous => {
         if (Date.now() < adventureCombatState.deadUntil) return previous;
         const next = previous === 'astronaut' ? 'jackalope' : 'astronaut';
@@ -4707,6 +4709,7 @@ export function App() {
                                 <Jackalope
                                     adventureMode={adventureMode}
                                     adventureAvatar={adventureAvatar}
+                                    rainbowUnicorn={playerAppearance === 'unicorn'}
                                     ref={playerRef}
                                     position={[-100, 7, 10]}
                                     walkSpeed={0.56}
@@ -4754,6 +4757,7 @@ export function App() {
                                 <Jackalope
                                     adventureMode={adventureMode}
                                     adventureAvatar={adventureAvatar}
+                                    rainbowUnicorn={playerAppearance === 'unicorn'}
                                     ref={playerRef}
                                     position={everlyMode ? [-42, 3, 25] : [-100, 7, 10]}
                                     walkSpeed={0.56}
@@ -5089,6 +5093,11 @@ export function App() {
                 }}
                 onClose={() => setShowGameModeMenu(false)}
                 onSelect={selectGameMode}
+                onRestartEverly={() => {
+                    window.dispatchEvent(new CustomEvent('everly:reset-goals'));
+                    window.dispatchEvent(new CustomEvent('player_respawned', { detail: { position: [0, 2.4, 54] } }));
+                    setShowGameModeMenu(false);
+                }}
             />
 
             {/* Add Settings Hint */}
@@ -5126,8 +5135,6 @@ export function App() {
                         window.location.href = '/?mode=adventure&editor=terrain';
                     }}
                 />
-            ) : everlyMode ? (
-                <EverlyAdventureHUD avatar={adventureAvatar} onToggleAvatar={toggleAdventureAvatar} />
             ) : gameMode === 'hunt' ? (
                 <GameHUD
                     jackalopesScore={jackalopesScore}

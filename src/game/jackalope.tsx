@@ -23,6 +23,7 @@ import { Component, Entity, EntityType } from './ecs'
 // Import ConnectionManager for multiplayer support
 import { ConnectionManager } from '../network/ConnectionManager'
 import { JackalopeModel } from './JackalopeModel' // Import the JackalopeModel component
+import { RainbowUnicornModel } from './RainbowUnicornModel'
 
 // Add global type declaration at the top of the file
 declare global {
@@ -99,6 +100,7 @@ type JackalopeProps = RigidBodyProps & {
     visible?: boolean
     thirdPersonView?: boolean
     adventureAvatar?: 'jackalope' | 'astronaut'
+    rainbowUnicorn?: boolean
     adventureMode?: boolean
     isolatedWaterSurfaceAt?: (x: number, y: number, z: number, wasSwimming: boolean) => number | null
 }
@@ -124,6 +126,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
     thirdPersonView = false,
     adventureMode = false,
     adventureAvatar = 'jackalope', 
+    rainbowUnicorn = false,
     isolatedWaterSurfaceAt,
     ...props 
 }, ref) => {
@@ -191,6 +194,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
     const gamepadState = useGamepad()
     const sampleSwimming = useSwimming(adventureMode, isolatedWaterSurfaceAt)
     const wasSwimming = useRef(false)
+    const [isSwimming, setIsSwimming] = useState(false)
     const slideLayouts = useMemo(() => {
         // Everly's isolated realm must not even read the shared saved map.
         if (!adventureMode || isolatedWaterSurfaceAt) return []
@@ -574,6 +578,7 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
         const surface = sampleSwimming(position.current, camera.getWorldPosition(_cameraDirection).y, gamepadState.connected)
         const swimming = surface !== null
         if (swimming !== wasSwimming.current) {
+            setIsSwimming(swimming)
             velocity.current.y = 0
             hopTimer.current = 0
             isHopping.current = false
@@ -1108,11 +1113,11 @@ export const Jackalope = forwardRef<EntityType, JackalopeProps>(({
                 <group 
                     ref={jackalopeModelRef} 
                     scale={[2, 2, 2]}
-                    position={[position.current.x, position.current.y - 2.15, position.current.z]}
+                    position={[position.current.x, position.current.y - (rainbowUnicorn ? 1.85 : 2.15), position.current.z]}
                     rotation={[0, rotation.current + Math.PI, 0]}
                 >
                     <group ref={jackalopeLeanRef}>
-                        {adventureMode && adventureAvatar === 'astronaut' ? <group name="adventure-astronaut">
+                        {rainbowUnicorn ? <RainbowUnicornModel scale={0.36} locomotion={isSwimming ? 'swim' : animation as 'idle' | 'walk' | 'run'} /> : adventureMode && adventureAvatar === 'astronaut' ? <group name="adventure-astronaut">
                             <MercModel adventureStyle everlyStyle={!!isolatedWaterSurfaceAt} flinchUntil={flinchUntil} animation={animation} scale={[1.8, 1.8, 1.8]} />
                         </group> : <JackalopeModel
                             animation={animation}

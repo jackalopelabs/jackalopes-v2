@@ -3,7 +3,8 @@ import { Html } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { createEverlyCloudTrail, EVERLY_CASTLE_FLOOR, EVERLY_CASTLE_FRONT_WALLS, EVERLY_DRY_GROUND_CAPS, EVERLY_GOALS, EVERLY_RIVER, EVERLY_RIVER_BANKS, EVERLY_RIVER_EXIT_RAMPS, everlyWaterSurfaceAt, isEverlyDoorPress, reachedEverlyGoals, resetEverlyGoals, type EverlyGoal } from './everly-adventure'
+import { createEverlyCloudTrail, EVERLY_CASTLE_FLOOR, EVERLY_CASTLE_FRONT_WALLS, EVERLY_DRY_GROUND_CAPS, EVERLY_RIVER, EVERLY_RIVER_BANKS, EVERLY_RIVER_EXIT_RAMPS, everlyWaterSurfaceAt, isEverlyDoorPress, reachedEverlyGoals, resetEverlyGoals, type EverlyGoal } from './everly-adventure'
+import { RainbowUnicornModel } from './RainbowUnicornModel'
 
 declare global {
   interface Window {
@@ -11,7 +12,6 @@ declare global {
     __localPlayerInteract?: boolean
   }
 }
-
 function CloudPath() {
   const clouds = useMemo(createEverlyCloudTrail, [])
   return <group name="everly-cloud-path">
@@ -31,6 +31,11 @@ function CastleDoors({ onOpened }: { onOpened: () => void }) {
   const [near, setNear] = useState(false), [opened, setOpened] = useState(false)
   const axis = useMemo(() => new THREE.Vector3(0, 1, 0), [])
   const leftRotation = useMemo(() => new THREE.Quaternion(), []), rightRotation = useMemo(() => new THREE.Quaternion(), [])
+  useEffect(() => {
+    const reset = () => { target.current = 0; angle.current = 0; setOpened(false) }
+    window.addEventListener('everly:reset-goals', reset)
+    return () => window.removeEventListener('everly:reset-goals', reset)
+  }, [])
   useFrame((_, delta) => {
     const p = window.__localPlayerPosition
     const isNear = !!p && Math.hypot(p.x, p.z + 54) < 7 && p.y < 13
@@ -129,34 +134,6 @@ function RainbowFlowers() {
     blooms.current.instanceMatrix.needsUpdate = true; blooms.current.instanceColor!.needsUpdate = true; stems.current.instanceMatrix.needsUpdate = true
   }, [data, dummy])
   return <group name="everly-rainbow-flower-garden"><instancedMesh ref={stems} args={[undefined, undefined, count]}><cylinderGeometry args={[1, 1, 1, 5]} /><meshStandardMaterial color="#68bb75" roughness={.8} /></instancedMesh><instancedMesh ref={blooms} args={[undefined, undefined, count]}><dodecahedronGeometry args={[1, 0]} /><meshStandardMaterial roughness={.58} /></instancedMesh></group>
-}
-
-function Unicorn({ position, color, index }: { position: [number, number, number]; color: string; index: number }) {
-  const root = useRef<THREE.Group>(null), legs = useRef<(THREE.Group | null)[]>([])
-  useFrame(({ clock }) => {
-    const time = clock.elapsedTime * .95 + index * 1.7
-    if (root.current) root.current.position.y = position[1] + Math.sin(time * 1.3) * .08
-    legs.current.forEach((leg, i) => { if (leg) leg.rotation.x = Math.sin(time * 2.4 + (i % 2) * Math.PI) * .1 })
-  })
-  const mane = ['#ff5d9d', '#ffb85e', '#fff06d', '#6de0a0', '#73dff4', '#a18bff']
-  return <group ref={root} position={position} rotation={[0, index === 1 ? Math.PI : -.28, 0]} name={`rainbow-unicorn-${index}`}>
-    {/* Horse profile: long body, upright sloping neck, muzzle, mane, tail and four hooved legs. */}
-    <mesh position={[0, 1.34, .05]} scale={[.58, .66, 1.22]} castShadow><sphereGeometry args={[1, 16, 12]} /><meshStandardMaterial color={color} roughness={.7} /></mesh>
-    <mesh position={[0, 1.97, -.58]} rotation={[-.48, 0, 0]} scale={[.42, .84, .45]} castShadow><capsuleGeometry args={[.29, 1, 5, 10]} /><meshStandardMaterial color={color} roughness={.7} /></mesh>
-    <mesh position={[0, 2.54, -.93]} scale={[.36, .34, .52]} castShadow><sphereGeometry args={[1, 14, 10]} /><meshStandardMaterial color={color} roughness={.7} /></mesh>
-    <mesh position={[0, 2.37, -1.28]} scale={[.28, .2, .34]} castShadow><sphereGeometry args={[1, 12, 8]} /><meshStandardMaterial color="#fff0ed" roughness={.72} /></mesh>
-    {[-1, 1].map(side => <group key={side}>
-      <mesh position={[side * .25, 2.67, -1.04]}><sphereGeometry args={[.065, 8, 6]} /><meshStandardMaterial color="#562d4b" /></mesh>
-      <mesh position={[side * .18, 2.91, -.9]} rotation={[side * -.18, 0, side * -.12]}><coneGeometry args={[.14, .44, 7]} /><meshStandardMaterial color={color} roughness={.7} /></mesh>
-    </group>)}
-    <mesh position={[0, 3.02, -1.2]} rotation={[Math.PI / 2, 0, 0]}><coneGeometry args={[.13, .62, 8]} /><meshStandardMaterial color="#fff4a5" emissive="#ffe795" emissiveIntensity={.34} metalness={.12} roughness={.34} /></mesh>
-    {[-1, 1, -1, 1].map((side, i) => <group key={i} ref={node => { legs.current[i] = node }} position={[side * .34, .76, i < 2 ? -.66 : .79]}>
-      <mesh position={[0, -.28, 0]} castShadow><capsuleGeometry args={[.115, .6, 4, 8]} /><meshStandardMaterial color={color} roughness={.72} /></mesh>
-      <mesh position={[0, -.66, -.025]} castShadow><boxGeometry args={[.27, .18, .32]} /><meshStandardMaterial color="#56395d" roughness={.42} /></mesh>
-    </group>)}
-    {mane.map((shade, i) => <mesh key={shade} position={[0, 2.35 - i * .12, -.62 + i * .11]} scale={[.29, .2, .28]}><sphereGeometry args={[1, 10, 8]} /><meshStandardMaterial color={shade} roughness={.55} /></mesh>)}
-    {mane.slice(0, 5).map((shade, i) => <mesh key={`tail-${shade}`} position={[0, 1.74 - i * .11, 1.17 + i * .1]} rotation={[.25, 0, 0]} scale={[.16, .16, .38]}><sphereGeometry args={[1, 9, 7]} /><meshStandardMaterial color={shade} roughness={.55} /></mesh>)}
-  </group>
 }
 
 function makeEverlyFishGeometry() {
@@ -259,34 +236,10 @@ export function EverlyAdventure() {
     <Castle onOpened={completeCastle} />
     <CloudPath />
     <RainbowFlowers />
-    <Unicorn position={[-21, 0, -38]} color="#ff83ba" index={0} />
-    <Unicorn position={[22, 0, -103]} color="#9c8aff" index={1} />
-    <Unicorn position={[-48, 0, -112]} color="#76dfee" index={2} />
+    <RainbowUnicornModel position={[-21, 0, -38]} yaw={Math.PI - .28} phase={0} ambient />
+    <RainbowUnicornModel position={[22, 0, -103]} yaw={0} phase={1.7} ambient />
+    <RainbowUnicornModel position={[-48, 0, -112]} yaw={Math.PI} phase={3.4} ambient />
     <mesh position={[-30, 1.3, 8]}><torusGeometry args={[2.3, .12, 8, 32]} /><meshStandardMaterial color="#ffe78b" emissive="#ffb6d8" emissiveIntensity={.4} /></mesh>
     <mesh position={[0, .25, 47]} rotation={[-Math.PI / 2, 0, 0]}><ringGeometry args={[12, 20, 32]} /><meshStandardMaterial color="#fff1f9" emissive="#f7a9dc" emissiveIntensity={.2} roughness={.8} /></mesh>
   </>
-}
-
-export function EverlyAdventureHUD({ avatar, onToggleAvatar }: { avatar: 'jackalope' | 'astronaut'; onToggleAvatar: () => void }) {
-  const [completed, setCompleted] = useState<Set<EverlyGoal>>(resetEverlyGoals)
-  useEffect(() => {
-    const onGoals = (event: Event) => {
-      const ids = (event as CustomEvent<{ ids?: EverlyGoal[] }>).detail?.ids
-      if (Array.isArray(ids)) setCompleted(previous => new Set([...previous, ...ids]))
-    }
-    const onReset = () => setCompleted(resetEverlyGoals())
-    window.addEventListener('everly:goal-complete', onGoals)
-    window.addEventListener('everly:reset-goals', onReset)
-    return () => { window.removeEventListener('everly:goal-complete', onGoals); window.removeEventListener('everly:reset-goals', onReset) }
-  }, [])
-  const reset = () => window.dispatchEvent(new CustomEvent('everly:reset-goals'))
-  const controls = 'Move: WASD / stick / touch · Jump: Space / A · Swim: move · Dive: C / L2 · Use: F / X / Touch Use'
-  return <section data-testid="everly-adventure-hud" aria-label="Everly's Adventure" style={{ position: 'fixed', left: 18, top: 18, zIndex: 2050, width: 'min(320px,calc(100vw - 36px))', boxSizing: 'border-box', padding: '14px 16px', borderRadius: 20, color: '#59284d', background: 'linear-gradient(145deg,rgba(255,248,253,.96),rgba(255,224,243,.91))', boxShadow: '0 10px 36px #8e3f7250', fontFamily: 'system-ui,sans-serif', pointerEvents: 'auto' }}>
-    <div style={{ fontSize: 11, letterSpacing: 2, fontWeight: 900, color: '#ad4c92' }}>A LITTLE MAGICAL JOURNEY</div><strong style={{ display: 'block', fontSize: 23, lineHeight: 1.15, margin: '4px 0 9px' }}>Everly&apos;s Adventure</strong>
-    <div style={{ fontSize: 13, color: '#7e4d71', marginBottom: 9 }}>Find the flowers, meet the fish, follow the clouds, and open the castle!</div>
-    {EVERLY_GOALS.map(goal => <div key={goal.id} style={{ fontSize: 13, padding: '3px 0', color: completed.has(goal.id) ? '#438763' : '#855779' }}>{completed.has(goal.id) ? '✓' : '○'}  {goal.label}</div>)}
-    <div style={{ borderTop: '1px solid #dc9dc944', marginTop: 10, paddingTop: 8, fontSize: 10, lineHeight: 1.5, color: '#885e7d' }}>{controls}</div>
-    <button type="button" onClick={onToggleAvatar} aria-label={avatar === 'jackalope' ? 'Switch to astronaut' : 'Switch to jackalope'} style={{ marginTop: 8, marginRight: 7, border: 0, borderRadius: 10, background: '#ecc5ec', color: '#692a56', padding: '6px 10px', fontWeight: 750, cursor: 'pointer' }}>{avatar === 'jackalope' ? 'Try astronaut' : 'Try jackalope'}</button>
-    <button type="button" onClick={reset} style={{ marginTop: 8, border: 0, borderRadius: 10, background: '#f5b5d8', color: '#692a56', padding: '6px 10px', fontWeight: 750, cursor: 'pointer' }}>Start the journey over</button>
-  </section>
 }

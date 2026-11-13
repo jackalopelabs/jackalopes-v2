@@ -7,13 +7,13 @@ const compiled = await build({
   stdin: { contents: `export * from './src/game/game-mode'; export * from './src/game/everly-adventure';`, resolveDir: process.cwd() },
   bundle: true, format: 'esm', platform: 'node', write: false,
 })
-const { parseGameMode, shouldInitializeSharedTerrain, shouldConnectToSharedSession, shouldReloadForModeEntry,
+const { parseGameMode, getAdventurePlayerAppearance, canShowEverlyRestartAction, shouldInitializeSharedTerrain, shouldConnectToSharedSession, shouldReloadForModeEntry,
   EVERLY_GOALS, EVERLY_RIVER, EVERLY_RIVER_BANKS, EVERLY_DRY_GROUND_CAPS, EVERLY_CASTLE_FLOOR, EVERLY_CASTLE_FRONT_WALLS, EVERLY_RIVER_EXIT_RAMPS,
   everlyGroundRegionAt, everlyWaterSurfaceAt, everlyRampTopAtWorldX, createEverlyCloudTrail, reachedEverlyGoals, resetEverlyGoals, isEverlyDoorPress } =
   await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
-const [scene, app, menu, main, connection, intro] = await Promise.all([
+const [scene, app, menu, main, connection, intro, player, unicornModel] = await Promise.all([
   'src/game/EverlyAdventure.tsx', 'src/App.tsx', 'src/components/GameModeMenu.tsx', 'src/main.tsx',
-  'src/network/ConnectionManager.ts', 'src/components/IntroScreen/IntroScreen.tsx',
+  'src/network/ConnectionManager.ts', 'src/components/IntroScreen/IntroScreen.tsx', 'src/game/jackalope.tsx', 'src/game/RainbowUnicornModel.tsx',
 ].map(file => readFile(file, 'utf8')))
 
 test('mode picker selects Everly; boot, menu transitions, and shared networking stay isolated', () => {
@@ -36,6 +36,16 @@ test('mode picker selects Everly; boot, menu transitions, and shared networking 
   assert.match(app, /connectionManager\.setGameMode\(nextMode\)/)
   assert.match(menu, /everly/)
   assert.match(intro, /everly/i, 'Hunt onboarding is replaced for the child-friendly realm')
+})
+
+test('Everly always resolves to its playable unicorn while classic avatar preference remains unchanged', () => {
+  assert.equal(getAdventurePlayerAppearance('everly', 'astronaut'), 'unicorn')
+  assert.equal(getAdventurePlayerAppearance('everly', 'jackalope'), 'unicorn')
+  assert.equal(getAdventurePlayerAppearance('adventure', 'astronaut'), 'astronaut')
+  assert.equal(getAdventurePlayerAppearance('adventure', 'jackalope'), 'jackalope')
+  assert.match(app, /getAdventurePlayerAppearance\(gameMode, savedAdventureAvatar\)/)
+  assert.match(app, /playerAppearance === 'unicorn'/)
+  assert.match(player, /rainbowUnicorn \? <RainbowUnicornModel/)
 })
 
 test('private river bounds, clear bank edges, bed and swim sampler are consistent', () => {
@@ -117,11 +127,13 @@ test('castle front leaves a real 6m doorway; swinging kinematic leaves block unt
 })
 
 test('unicorn is a horse silhouette with exactly one central horn and seven separated rainbow bands', () => {
-  const unicorn = scene.slice(scene.indexOf('function Unicorn'), scene.indexOf('function makeEverlyFishGeometry'))
-  assert.match(unicorn, /four hooved legs/)
-  assert.equal((unicorn.match(/<coneGeometry args=\{\[\.13, \.62/g) || []).length, 1)
-  assert.match(unicorn, /side \* \.18, 2\.91, -\.9/, 'two colored ears remain')
-  assert.match(unicorn, /tail-/)
+  assert.match(unicornModel, /legs\.current\.forEach/)
+  assert.equal((unicornModel.match(/<coneGeometry args=\{\[\.13, \.62/g) || []).length, 1)
+  assert.match(unicornModel, /side \* \.18, 2\.91, -\.9/, 'two colored ears remain')
+  assert.match(unicornModel, /rotation=\{\[-\.35, 0, 0\]\}/, 'single forehead horn points up and forward')
+  assert.match(unicornModel, /tail-/)
+  assert.match(unicornModel, /locomotion === 'swim'/)
+  assert.match(scene, /<RainbowUnicornModel position=/, 'NPCs reuse the player model')
   assert.match(scene, /colors\.map\(\(color, index\)/)
   assert.match(scene, /43 \+ index \* 3\.6/)
 })
@@ -141,8 +153,18 @@ test('goals are local/resettable and opening, not standing near the castle, comp
 
 test('picker keeps legacy Adventure/Hunt routes and its ordinary player controls; Everly has friendly onboarding', () => {
   assert.match(menu, /\['adventure', 'hunt', 'everly'\]/)
-  assert.match(app, /EverlyAdventureHUD/)
+  assert.doesNotMatch(app, /EverlyAdventureHUD/, 'no persistent Everly gameplay panel is mounted')
   assert.match(app, /isolatedWaterSurfaceAt=\{everlyMode \? everlyWaterSurfaceAt : undefined\}/)
   assert.match(app, /adventureMode \? 'jackalope' : playerCharacterInfo\.type/)
   assert.match(app, /!everlyMode && <AdventureCombat/)
+})
+
+test('Everly reset stays inside the existing menu and is absent during play', () => {
+  assert.equal(canShowEverlyRestartAction('everly', true), true)
+  assert.equal(canShowEverlyRestartAction('everly', false), false)
+  assert.equal(canShowEverlyRestartAction('adventure', true), false)
+  assert.match(menu, /canShowEverlyRestartAction/)
+  assert.match(menu, /M \/ MENU/)
+  assert.match(app, /onRestartEverly/)
+  assert.match(app, /everly:reset-goals/)
 })
