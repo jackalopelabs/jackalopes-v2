@@ -228,6 +228,26 @@ test('Everly follower route joins at recruit range, follows a long dry route, an
   assert.equal(friend.motion, 'run')
 })
 
+test('freshly recruited friend preserves its gap while player pauses, then follows as a dry trail grows', () => {
+  const home = { x: -21, y: 0, z: -38, phase: 0 }, friend = createEverlyFriendState(home), trail = createEverlyFollowTrail()
+  const player = { x: -29, y: 1.95, z: -35 }
+  recordEverlyPlayerTrail(trail, player, true); updateEverlyFriend(friend, player, .05, trail, true, 0)
+  assert.equal(friend.recruited, true)
+  for (let frame = 0; frame < 60 * 3; frame++) {
+    recordEverlyPlayerTrail(trail, player, true)
+    updateEverlyFriend(friend, player, 1 / 60, trail, true, 0)
+  }
+  assert(Math.hypot(player.x - friend.x, player.z - friend.z) >= 3, 'waiting at the initial trail point cannot overlap a standing player')
+  const beforeWalk = { x: friend.x, z: friend.z }
+  for (let frame = 0; frame < Math.ceil(30 / (6.8 / 60)); frame++) {
+    player.z += 6.8 / 60
+    recordEverlyPlayerTrail(trail, player, true)
+    updateEverlyFriend(friend, player, 1 / 60, trail, true, 0)
+  }
+  assert(Math.hypot(friend.x - beforeWalk.x, friend.z - beforeWalk.z) > 3, 'friend begins following once the dry breadcrumb extends beyond its gap')
+  assert(Math.hypot(player.x - friend.x, player.z - friend.z) >= 3, 'joining retains a safe player gap')
+})
+
 test('Everly following distance and gait are stable at 30 and 60 fps', () => {
   const simulate = fps => {
     const home = { x: -21, y: 0, z: -38, phase: .2 }, friend = createEverlyFriendState(home), trail = createEverlyFollowTrail()

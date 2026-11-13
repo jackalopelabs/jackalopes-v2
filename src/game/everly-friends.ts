@@ -224,12 +224,19 @@ function updateFollowing(state: EverlyFriendState, trail: EverlyFollowTrail, dt:
     state.routeSeeded = false; state.waiting = true; state.waitingReason = 'route history rolled over'; state.motion = 'idle'; return
   }
   if (!state.onTrail) {
-    if (!trailPointAt(trail, state.routeCursor, state.routeGeneration, state) || !everlyFollowerSegmentSafe(state.x, state.z, state.routeX, state.routeZ, doorsOpen)) {
+    const gap = FOLLOW_GAPS[Math.max(0, Math.min(FOLLOW_GAPS.length - 1, friendIndex))]
+    const goal = Math.max(trail.segmentStartDistance, trail.totalDistance - gap)
+    if (goal <= state.routeCursor + 0.02) {
+      state.waiting = true; state.waitingReason = 'keeping a friendly gap'; state.motion = 'idle'; return
+    }
+    // Join the route at its gap-limited point, never at the player's initial breadcrumb.
+    if (!trailPointAt(trail, goal, state.routeGeneration, state) || !everlyFollowerSegmentSafe(state.x, state.z, state.routeX, state.routeZ, doorsOpen)) {
       state.routeSeeded = false; state.waiting = true; state.waitingReason = 'finding safe route'; state.motion = 'idle'; return
     }
-    const dx = state.routeX - state.x, dz = state.routeZ - state.z, distance = Math.hypot(dx, dz), step = Math.min(distance, (state.routeCursor < trail.totalDistance - 8 ? CATCHUP_SPEED : FOLLOW_SPEED) * dt)
+    const speed = goal - state.routeCursor > 8 ? CATCHUP_SPEED : FOLLOW_SPEED
+    const dx = state.routeX - state.x, dz = state.routeZ - state.z, distance = Math.hypot(dx, dz), step = Math.min(distance, speed * dt)
     if (distance > 1e-5 && step > 0) { state.x += dx / distance * step; state.z += dz / distance * step }
-    if (distance <= step + 1e-4) state.onTrail = true
+    if (distance <= step + 1e-4) { state.onTrail = true; state.routeCursor = goal }
     const angle = Math.atan2(Math.sin(Math.atan2(dx, dz) - state.heading), Math.cos(Math.atan2(dx, dz) - state.heading))
     state.heading += angle * (1 - Math.exp(-dt * 5))
     state.following = step > 0.001; state.motion = dt > 1e-5 && step / dt > 6.8 ? 'run' : step > 0.001 ? 'walk' : 'idle'
